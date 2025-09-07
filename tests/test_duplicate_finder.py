@@ -28,8 +28,8 @@ class TestFileHashing:
         file1.write_bytes(content)
         file2.write_bytes(content)
         
-        hash1 = duplicate_finder.calculate_file_hash(file1)
-        hash2 = duplicate_finder.calculate_file_hash(file2)
+        hash1 = duplicate_finder.calculate_file_hash(file1, partial=False)
+        hash2 = duplicate_finder.calculate_file_hash(file2, partial=False)
         
         assert hash1 == hash2
         assert len(hash1) == 64  # SHA256 produces 64 hex characters
@@ -65,6 +65,38 @@ class TestFileHashing:
             result = duplicate_finder.calculate_file_hash(nonexistent)
         
         assert result is None
+    
+    def test_calculate_partial_hash(self, tmp_path):
+        """Test partial hash calculation."""
+        # Create a large file
+        large_file = tmp_path / "large.txt"
+        content = b"Start content" + b"X" * 10000 + b"End content"
+        large_file.write_bytes(content)
+        
+        partial_hash = duplicate_finder.calculate_file_hash(large_file, partial=True)
+        full_hash = duplicate_finder.calculate_file_hash(large_file, partial=False)
+        
+        # Partial and full hash should be different for large files
+        assert partial_hash != full_hash
+        assert len(partial_hash) == 64
+    
+    def test_partial_hash_same_beginning(self, tmp_path):
+        """Test that files with same beginning have same partial hash."""
+        file1 = tmp_path / "file1.txt"
+        file2 = tmp_path / "file2.txt"
+        
+        # Same first 4KB, different afterwards
+        common_start = b"A" * 4096
+        file1.write_bytes(common_start + b"Different ending 1")
+        file2.write_bytes(common_start + b"Different ending 2")
+        
+        partial1 = duplicate_finder.calculate_file_hash(file1, partial=True)
+        partial2 = duplicate_finder.calculate_file_hash(file2, partial=True)
+        full1 = duplicate_finder.calculate_file_hash(file1, partial=False)
+        full2 = duplicate_finder.calculate_file_hash(file2, partial=False)
+        
+        assert partial1 == partial2  # Same partial hash
+        assert full1 != full2  # Different full hash
 
 
 class TestDirectoryScanning:
@@ -259,6 +291,101 @@ class TestMainFunction:
                 assert exc_info.value.code == 0
 
 
+class TestMultiStageComparison:
+    """Test multi-stage duplicate detection optimization."""
+    
+    @patch('duplicate_finder.tqdm')
+    @patch('builtins.print')
+    def test_size_based_filtering(self, mock_print, mock_tqdm, tmp_path):
+        """Test that files with unique sizes are not hashed."""
+        mock_tqdm.side_effect = lambda x, **kwargs: x
+        
+        # Create files with unique sizes
+        file1 = tmp_path / "small.txt"
+        file2 = tmp_path / "medium.txt"
+        file3 = tmp_path / "large.txt"
+        
+        file1.write_bytes(b"A")  # 1 byte
+        file2.write_bytes(b"BB")  # 2 bytes
+        file3.write_bytes(b"CCC")  # 3 bytes
+        
+        files = [file1, file2, file3]
+        duplicates, unique_files = duplicate_finder.find_duplicates(files)
+        
+        # All files should be unique
+        assert len(duplicates) == 0
+        assert len(unique_files) == 3
+        
+        # Verify print output mentions size-based detection
+        print_calls = [str(call) for call in mock_print.call_args_list]
+        assert any("unique by size" in str(call).lower() for call in print_calls)
+    
+    @patch('duplicate_finder.tqdm')
+    @patch('builtins.print')
+    def test_partial_hash_optimization(self, mock_print, mock_tqdm, tmp_path):
+        """Test that partial hashing prevents unnecessary full hashing."""
+        mock_tqdm.side_effect = lambda x, **kwargs: x
+        
+        # Create files with same size but different content at start
+        file1 = tmp_path / "file1.txt"
+        file2 = tmp_path / "file2.txt"
+        
+        # Same size, different content
+        file1.write_bytes(b"A" * 1000)
+        file2.write_bytes(b"B" * 1000)
+        
+        files = [file1, file2]
+        duplicates, unique_files = duplicate_finder.find_duplicates(files)
+        
+        # Files should be unique
+        assert len(duplicates) == 0
+        assert len(unique_files) == 2
+    
+    @patch('duplicate_finder.tqdm')
+    @patch('builtins.print')
+    def test_full_hash_for_partial_matches(self, mock_print, mock_tqdm, tmp_path):
+        """Test that files with same partial hash get full hashed."""
+        mock_tqdm.side_effect = lambda x, **kwargs: x
+        
+        # Create files with same beginning but different endings
+        file1 = tmp_path / "file1.txt"
+        file2 = tmp_path / "file2.txt"
+        file3 = tmp_path / "file3.txt"
+        
+        common_start = b"X" * 5000  # Larger than 4KB
+        file1.write_bytes(common_start + b"Ending1")
+        file2.write_bytes(common_start + b"Ending2")
+        file3.write_bytes(common_start + b"Ending1")  # Duplicate of file1
+        
+        files = [file1, file2, file3]
+        duplicates, unique_files = duplicate_finder.find_duplicates(files)
+        
+        # file1 and file3 should be duplicates
+        assert len(duplicates) == 1
+        assert len(unique_files) == 1
+        
+        dup_group = list(duplicates.values())[0]
+        assert len(dup_group) == 2
+        assert file1 in dup_group
+        assert file3 in dup_group
+        assert file2 in unique_files
+    
+    def test_get_file_size(self, tmp_path):
+        """Test file size retrieval."""
+        test_file = tmp_path / "test.txt"
+        content = b"Test content"
+        test_file.write_bytes(content)
+        
+        size = duplicate_finder.get_file_size(test_file)
+        assert size == len(content)
+    
+    def test_get_file_size_nonexistent(self, tmp_path):
+        """Test file size retrieval for nonexistent file."""
+        nonexistent = tmp_path / "nonexistent.txt"
+        size = duplicate_finder.get_file_size(nonexistent)
+        assert size == -1
+
+
 class TestProgressReporting:
     """Test progress reporting functionality."""
     
@@ -288,7 +415,7 @@ class TestProgressReporting:
     
     @patch('duplicate_finder.tqdm')
     def test_find_duplicates_shows_progress(self, mock_tqdm_class, tmp_path):
-        """Test that hashing shows progress bar."""
+        """Test that multi-stage comparison shows progress bars."""
         # Create test files
         files = []
         for i in range(3):
@@ -302,21 +429,18 @@ class TestProgressReporting:
         with patch('builtins.print'):
             duplicates, unique_files = duplicate_finder.find_duplicates(files)
         
-        # Verify tqdm was called for hashing
+        # Verify tqdm was called multiple times for different stages
         assert mock_tqdm_class.call_count >= 1
         calls = mock_tqdm_class.call_args_list
         
-        # Find the hashing progress bar call
-        hashing_call = None
+        # Check for progress bar descriptions
+        descriptions = []
         for call in calls:
             if len(call[1]) > 0 and 'desc' in call[1]:
-                if 'Hashing' in call[1]['desc']:
-                    hashing_call = call
-                    break
+                descriptions.append(call[1]['desc'])
         
-        assert hashing_call is not None
-        assert 'unit' in hashing_call[1]
-        assert 'files' in hashing_call[1]['unit']
+        # Should have progress bars for various stages
+        assert any('sizes' in desc.lower() for desc in descriptions)  # Stage 1
 
 
 class TestArgumentParsing:
