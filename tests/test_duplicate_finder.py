@@ -5,7 +5,7 @@ Unit tests for duplicate_finder.py
 import hashlib
 import tempfile
 from pathlib import Path
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch, MagicMock, ANY
 import sys
 import os
 
@@ -70,8 +70,12 @@ class TestFileHashing:
 class TestDirectoryScanning:
     """Test directory scanning functionality."""
     
-    def test_scan_directory_recursive(self, tmp_path):
+    @patch('duplicate_finder.tqdm')
+    def test_scan_directory_recursive(self, mock_tqdm, tmp_path):
         """Test recursive directory scanning."""
+        # Make tqdm act as a passthrough
+        mock_tqdm.side_effect = lambda x, **kwargs: x
+        
         # Create nested structure
         (tmp_path / "subdir1").mkdir()
         (tmp_path / "subdir1" / "subdir2").mkdir()
@@ -84,26 +88,35 @@ class TestDirectoryScanning:
         file2.touch()
         file3.touch()
         
-        files = duplicate_finder.scan_directory(tmp_path)
+        with patch('builtins.print'):
+            files = duplicate_finder.scan_directory(tmp_path)
         
         assert len(files) == 3
         assert file1 in files
         assert file2 in files
         assert file3 in files
     
-    def test_scan_directory_empty(self, tmp_path):
+    @patch('duplicate_finder.tqdm')
+    def test_scan_directory_empty(self, mock_tqdm, tmp_path):
         """Test scanning empty directory."""
-        files = duplicate_finder.scan_directory(tmp_path)
+        mock_tqdm.side_effect = lambda x, **kwargs: x
+        
+        with patch('builtins.print'):
+            files = duplicate_finder.scan_directory(tmp_path)
         assert files == []
     
-    def test_scan_directory_ignores_directories(self, tmp_path):
+    @patch('duplicate_finder.tqdm')
+    def test_scan_directory_ignores_directories(self, mock_tqdm, tmp_path):
         """Test that directories are not included in file list."""
+        mock_tqdm.side_effect = lambda x, **kwargs: x
+        
         subdir = tmp_path / "subdir"
         subdir.mkdir()
         file1 = tmp_path / "file.txt"
         file1.touch()
         
-        files = duplicate_finder.scan_directory(tmp_path)
+        with patch('builtins.print'):
+            files = duplicate_finder.scan_directory(tmp_path)
         
         assert len(files) == 1
         assert file1 in files
@@ -113,8 +126,12 @@ class TestDirectoryScanning:
 class TestDuplicateFinding:
     """Test duplicate finding logic."""
     
-    def test_find_duplicates_with_duplicates(self, tmp_path):
+    @patch('duplicate_finder.tqdm')
+    @patch('builtins.print')
+    def test_find_duplicates_with_duplicates(self, mock_print, mock_tqdm, tmp_path):
         """Test finding actual duplicates."""
+        # Make tqdm act as a passthrough
+        mock_tqdm.side_effect = lambda x, **kwargs: x
         file1 = tmp_path / "file1.txt"
         file2 = tmp_path / "file2.txt"
         file3 = tmp_path / "file3.txt"
@@ -143,7 +160,11 @@ class TestDuplicateFinding:
         assert file2 in dup_group
         assert file3 in dup_group
     
-    def test_find_duplicates_no_duplicates(self, tmp_path):
+    @patch('duplicate_finder.tqdm')
+    @patch('builtins.print')
+    def test_find_duplicates_no_duplicates(self, mock_print, mock_tqdm, tmp_path):
+        # Make tqdm act as a passthrough
+        mock_tqdm.side_effect = lambda x, **kwargs: x
         """Test when no duplicates exist."""
         file1 = tmp_path / "file1.txt"
         file2 = tmp_path / "file2.txt"
@@ -157,7 +178,11 @@ class TestDuplicateFinding:
         assert len(duplicates) == 0
         assert len(unique_files) == 2
     
-    def test_find_duplicates_all_duplicates(self, tmp_path):
+    @patch('duplicate_finder.tqdm')
+    @patch('builtins.print')
+    def test_find_duplicates_all_duplicates(self, mock_print, mock_tqdm, tmp_path):
+        # Make tqdm act as a passthrough
+        mock_tqdm.side_effect = lambda x, **kwargs: x
         """Test when all files are duplicates."""
         file1 = tmp_path / "file1.txt"
         file2 = tmp_path / "file2.txt"
@@ -172,7 +197,11 @@ class TestDuplicateFinding:
         assert len(duplicates) == 1
         assert len(unique_files) == 0
     
-    def test_find_duplicates_multiple_groups(self, tmp_path):
+    @patch('duplicate_finder.tqdm')
+    @patch('builtins.print')
+    def test_find_duplicates_multiple_groups(self, mock_print, mock_tqdm, tmp_path):
+        # Make tqdm act as a passthrough
+        mock_tqdm.side_effect = lambda x, **kwargs: x
         """Test multiple duplicate groups."""
         # Group 1
         file1a = tmp_path / "file1a.txt"
@@ -228,6 +257,66 @@ class TestMainFunction:
                 with pytest.raises(SystemExit) as exc_info:
                     duplicate_finder.main()
                 assert exc_info.value.code == 0
+
+
+class TestProgressReporting:
+    """Test progress reporting functionality."""
+    
+    @patch('duplicate_finder.tqdm')
+    def test_scan_directory_shows_progress(self, mock_tqdm_class, tmp_path):
+        """Test that scanning shows progress bar."""
+        # Create some test files
+        for i in range(3):
+            (tmp_path / f"file{i}.txt").touch()
+        
+        # Configure mock
+        mock_progress_bar = MagicMock()
+        mock_tqdm_class.return_value = mock_progress_bar
+        mock_tqdm_class.side_effect = lambda x, **kwargs: x
+        
+        with patch('builtins.print') as mock_print:
+            files = duplicate_finder.scan_directory(tmp_path)
+        
+        # Verify tqdm was called with correct parameters
+        mock_tqdm_class.assert_called_once()
+        call_args = mock_tqdm_class.call_args
+        assert 'desc' in call_args[1]
+        assert 'Scanning' in call_args[1]['desc']
+        
+        # Verify we found files
+        assert len(files) == 3
+    
+    @patch('duplicate_finder.tqdm')
+    def test_find_duplicates_shows_progress(self, mock_tqdm_class, tmp_path):
+        """Test that hashing shows progress bar."""
+        # Create test files
+        files = []
+        for i in range(3):
+            file_path = tmp_path / f"file{i}.txt"
+            file_path.write_text(f"content{i}")
+            files.append(file_path)
+        
+        # Configure mock
+        mock_tqdm_class.side_effect = lambda x, **kwargs: x
+        
+        with patch('builtins.print'):
+            duplicates, unique_files = duplicate_finder.find_duplicates(files)
+        
+        # Verify tqdm was called for hashing
+        assert mock_tqdm_class.call_count >= 1
+        calls = mock_tqdm_class.call_args_list
+        
+        # Find the hashing progress bar call
+        hashing_call = None
+        for call in calls:
+            if len(call[1]) > 0 and 'desc' in call[1]:
+                if 'Hashing' in call[1]['desc']:
+                    hashing_call = call
+                    break
+        
+        assert hashing_call is not None
+        assert 'unit' in hashing_call[1]
+        assert 'files' in hashing_call[1]['unit']
 
 
 class TestArgumentParsing:

@@ -10,6 +10,8 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Dict, List, Set, Tuple
 
+from tqdm import tqdm
+
 
 def parse_arguments() -> argparse.Namespace:
     """Parse command-line arguments."""
@@ -41,8 +43,13 @@ def calculate_file_hash(file_path: Path) -> str:
 def scan_directory(directory: Path) -> List[Path]:
     """Recursively scan directory for all files."""
     files = []
+    print("Scanning for files...")
     try:
-        for item in directory.rglob("*"):
+        # First, count total items for progress bar
+        all_items = list(directory.rglob("*"))
+        
+        # Now filter files with progress bar
+        for item in tqdm(all_items, desc="Scanning", unit=" items", leave=False):
             if item.is_file():
                 files.append(item)
     except PermissionError as e:
@@ -61,7 +68,8 @@ def find_duplicates(files: List[Path]) -> Tuple[Dict[str, List[Path]], List[Path
     """
     hash_to_files = defaultdict(list)
     
-    for file_path in files:
+    print("\nCalculating file hashes...")
+    for file_path in tqdm(files, desc="Hashing", unit=" files", leave=True):
         file_hash = calculate_file_hash(file_path)
         if file_hash:
             hash_to_files[file_hash].append(file_path)
@@ -135,7 +143,7 @@ def main():
         print("No files found in the specified directory.")
         sys.exit(0)
     
-    print(f"Found {len(files)} files. Calculating hashes...\n")
+    print(f"\nFound {len(files)} files.")
     
     # Find duplicates
     duplicates, unique_files = find_duplicates(files)
