@@ -12,7 +12,7 @@ import os
 # Add parent directory to path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import duplicate_finder
+from duplicate_finder import cli, hasher, scanner, detector, formatter
 import pytest
 
 
@@ -28,8 +28,8 @@ class TestFileHashing:
         file1.write_bytes(content)
         file2.write_bytes(content)
         
-        hash1 = duplicate_finder.calculate_file_hash(file1, partial=False)
-        hash2 = duplicate_finder.calculate_file_hash(file2, partial=False)
+        hash1 = hasher.calculate_file_hash(file1, partial=False)
+        hash2 = hasher.calculate_file_hash(file2, partial=False)
         
         assert hash1 == hash2
         assert len(hash1) == 64  # SHA256 produces 64 hex characters
@@ -42,8 +42,8 @@ class TestFileHashing:
         file1.write_bytes(b"Content A")
         file2.write_bytes(b"Content B")
         
-        hash1 = duplicate_finder.calculate_file_hash(file1)
-        hash2 = duplicate_finder.calculate_file_hash(file2)
+        hash1 = hasher.calculate_file_hash(file1)
+        hash2 = hasher.calculate_file_hash(file2)
         
         assert hash1 != hash2
     
@@ -52,7 +52,7 @@ class TestFileHashing:
         empty_file = tmp_path / "empty.txt"
         empty_file.touch()
         
-        file_hash = duplicate_finder.calculate_file_hash(empty_file)
+        file_hash = hasher.calculate_file_hash(empty_file)
         # SHA256 of empty string
         expected = hashlib.sha256(b"").hexdigest()
         assert file_hash == expected
@@ -62,7 +62,7 @@ class TestFileHashing:
         nonexistent = tmp_path / "nonexistent.txt"
         
         with patch('sys.stderr'):
-            result = duplicate_finder.calculate_file_hash(nonexistent)
+            result = hasher.calculate_file_hash(nonexistent)
         
         assert result is None
     
@@ -73,8 +73,8 @@ class TestFileHashing:
         content = b"Start content" + b"X" * 10000 + b"End content"
         large_file.write_bytes(content)
         
-        partial_hash = duplicate_finder.calculate_file_hash(large_file, partial=True)
-        full_hash = duplicate_finder.calculate_file_hash(large_file, partial=False)
+        partial_hash = hasher.calculate_file_hash(large_file, partial=True)
+        full_hash = hasher.calculate_file_hash(large_file, partial=False)
         
         # Partial and full hash should be different for large files
         assert partial_hash != full_hash
@@ -90,10 +90,10 @@ class TestFileHashing:
         file1.write_bytes(common_start + b"Different ending 1")
         file2.write_bytes(common_start + b"Different ending 2")
         
-        partial1 = duplicate_finder.calculate_file_hash(file1, partial=True)
-        partial2 = duplicate_finder.calculate_file_hash(file2, partial=True)
-        full1 = duplicate_finder.calculate_file_hash(file1, partial=False)
-        full2 = duplicate_finder.calculate_file_hash(file2, partial=False)
+        partial1 = hasher.calculate_file_hash(file1, partial=True)
+        partial2 = hasher.calculate_file_hash(file2, partial=True)
+        full1 = hasher.calculate_file_hash(file1, partial=False)
+        full2 = hasher.calculate_file_hash(file2, partial=False)
         
         assert partial1 == partial2  # Same partial hash
         assert full1 != full2  # Different full hash
@@ -102,7 +102,7 @@ class TestFileHashing:
 class TestDirectoryScanning:
     """Test directory scanning functionality."""
     
-    @patch('duplicate_finder.tqdm')
+    @patch('duplicate_finder.scanner.tqdm')
     def test_scan_directory_recursive(self, mock_tqdm, tmp_path):
         """Test recursive directory scanning."""
         # Make tqdm act as a passthrough
@@ -121,23 +121,23 @@ class TestDirectoryScanning:
         file3.touch()
         
         with patch('builtins.print'):
-            files = duplicate_finder.scan_directory(tmp_path)
+            files = scanner.scan_directory(tmp_path)
         
         assert len(files) == 3
         assert file1 in files
         assert file2 in files
         assert file3 in files
     
-    @patch('duplicate_finder.tqdm')
+    @patch('duplicate_finder.scanner.tqdm')
     def test_scan_directory_empty(self, mock_tqdm, tmp_path):
         """Test scanning empty directory."""
         mock_tqdm.side_effect = lambda x, **kwargs: x
         
         with patch('builtins.print'):
-            files = duplicate_finder.scan_directory(tmp_path)
+            files = scanner.scan_directory(tmp_path)
         assert files == []
     
-    @patch('duplicate_finder.tqdm')
+    @patch('duplicate_finder.scanner.tqdm')
     def test_scan_directory_ignores_directories(self, mock_tqdm, tmp_path):
         """Test that directories are not included in file list."""
         mock_tqdm.side_effect = lambda x, **kwargs: x
@@ -148,7 +148,7 @@ class TestDirectoryScanning:
         file1.touch()
         
         with patch('builtins.print'):
-            files = duplicate_finder.scan_directory(tmp_path)
+            files = scanner.scan_directory(tmp_path)
         
         assert len(files) == 1
         assert file1 in files
@@ -158,7 +158,7 @@ class TestDirectoryScanning:
 class TestDuplicateFinding:
     """Test duplicate finding logic."""
     
-    @patch('duplicate_finder.tqdm')
+    @patch('duplicate_finder.detector.tqdm')
     @patch('builtins.print')
     def test_find_duplicates_with_duplicates(self, mock_print, mock_tqdm, tmp_path):
         """Test finding actual duplicates."""
@@ -179,7 +179,7 @@ class TestDuplicateFinding:
         file4.write_bytes(b"Unique content")
         
         files = [file1, file2, file3, file4]
-        duplicates, unique_files = duplicate_finder.find_duplicates(files)
+        duplicates, unique_files = detector.find_duplicates(files)
         
         assert len(duplicates) == 1
         assert len(unique_files) == 1
@@ -192,7 +192,7 @@ class TestDuplicateFinding:
         assert file2 in dup_group
         assert file3 in dup_group
     
-    @patch('duplicate_finder.tqdm')
+    @patch('duplicate_finder.detector.tqdm')
     @patch('builtins.print')
     def test_find_duplicates_no_duplicates(self, mock_print, mock_tqdm, tmp_path):
         # Make tqdm act as a passthrough
@@ -205,12 +205,12 @@ class TestDuplicateFinding:
         file2.write_bytes(b"Content 2")
         
         files = [file1, file2]
-        duplicates, unique_files = duplicate_finder.find_duplicates(files)
+        duplicates, unique_files = detector.find_duplicates(files)
         
         assert len(duplicates) == 0
         assert len(unique_files) == 2
     
-    @patch('duplicate_finder.tqdm')
+    @patch('duplicate_finder.detector.tqdm')
     @patch('builtins.print')
     def test_find_duplicates_all_duplicates(self, mock_print, mock_tqdm, tmp_path):
         # Make tqdm act as a passthrough
@@ -224,12 +224,12 @@ class TestDuplicateFinding:
         file2.write_bytes(content)
         
         files = [file1, file2]
-        duplicates, unique_files = duplicate_finder.find_duplicates(files)
+        duplicates, unique_files = detector.find_duplicates(files)
         
         assert len(duplicates) == 1
         assert len(unique_files) == 0
     
-    @patch('duplicate_finder.tqdm')
+    @patch('duplicate_finder.detector.tqdm')
     @patch('builtins.print')
     def test_find_duplicates_multiple_groups(self, mock_print, mock_tqdm, tmp_path):
         # Make tqdm act as a passthrough
@@ -253,7 +253,7 @@ class TestDuplicateFinding:
         file3.write_bytes(b"Unique")
         
         files = [file1a, file1b, file2a, file2b, file3]
-        duplicates, unique_files = duplicate_finder.find_duplicates(files)
+        duplicates, unique_files = detector.find_duplicates(files)
         
         assert len(duplicates) == 2
         assert len(unique_files) == 1
@@ -268,7 +268,7 @@ class TestMainFunction:
         with patch('sys.argv', ['duplicate_finder.py', '/nonexistent/path']):
             with patch('sys.stderr'):
                 with pytest.raises(SystemExit) as exc_info:
-                    duplicate_finder.main()
+                    cli.main()
                 assert exc_info.value.code == 1
     
     def test_main_file_instead_of_directory(self, tmp_path):
@@ -279,7 +279,7 @@ class TestMainFunction:
         with patch('sys.argv', ['duplicate_finder.py', str(test_file)]):
             with patch('sys.stderr'):
                 with pytest.raises(SystemExit) as exc_info:
-                    duplicate_finder.main()
+                    cli.main()
                 assert exc_info.value.code == 1
     
     def test_main_empty_directory(self, tmp_path):
@@ -287,14 +287,14 @@ class TestMainFunction:
         with patch('sys.argv', ['duplicate_finder.py', str(tmp_path)]):
             with patch('sys.stdout'):
                 with pytest.raises(SystemExit) as exc_info:
-                    duplicate_finder.main()
+                    cli.main()
                 assert exc_info.value.code == 0
 
 
 class TestMultiStageComparison:
     """Test multi-stage duplicate detection optimization."""
     
-    @patch('duplicate_finder.tqdm')
+    @patch('duplicate_finder.detector.tqdm')
     @patch('builtins.print')
     def test_size_based_filtering(self, mock_print, mock_tqdm, tmp_path):
         """Test that files with unique sizes are not hashed."""
@@ -310,7 +310,7 @@ class TestMultiStageComparison:
         file3.write_bytes(b"CCC")  # 3 bytes
         
         files = [file1, file2, file3]
-        duplicates, unique_files = duplicate_finder.find_duplicates(files)
+        duplicates, unique_files = detector.find_duplicates(files)
         
         # All files should be unique
         assert len(duplicates) == 0
@@ -320,7 +320,7 @@ class TestMultiStageComparison:
         print_calls = [str(call) for call in mock_print.call_args_list]
         assert any("unique by size" in str(call).lower() for call in print_calls)
     
-    @patch('duplicate_finder.tqdm')
+    @patch('duplicate_finder.detector.tqdm')
     @patch('builtins.print')
     def test_partial_hash_optimization(self, mock_print, mock_tqdm, tmp_path):
         """Test that partial hashing prevents unnecessary full hashing."""
@@ -335,13 +335,13 @@ class TestMultiStageComparison:
         file2.write_bytes(b"B" * 1000)
         
         files = [file1, file2]
-        duplicates, unique_files = duplicate_finder.find_duplicates(files)
+        duplicates, unique_files = detector.find_duplicates(files)
         
         # Files should be unique
         assert len(duplicates) == 0
         assert len(unique_files) == 2
     
-    @patch('duplicate_finder.tqdm')
+    @patch('duplicate_finder.detector.tqdm')
     @patch('builtins.print')
     def test_full_hash_for_partial_matches(self, mock_print, mock_tqdm, tmp_path):
         """Test that files with same partial hash get full hashed."""
@@ -358,7 +358,7 @@ class TestMultiStageComparison:
         file3.write_bytes(common_start + b"Ending1")  # Duplicate of file1
         
         files = [file1, file2, file3]
-        duplicates, unique_files = duplicate_finder.find_duplicates(files)
+        duplicates, unique_files = detector.find_duplicates(files)
         
         # file1 and file3 should be duplicates
         assert len(duplicates) == 1
@@ -376,20 +376,20 @@ class TestMultiStageComparison:
         content = b"Test content"
         test_file.write_bytes(content)
         
-        size = duplicate_finder.get_file_size(test_file)
+        size = hasher.get_file_size(test_file)
         assert size == len(content)
     
     def test_get_file_size_nonexistent(self, tmp_path):
         """Test file size retrieval for nonexistent file."""
         nonexistent = tmp_path / "nonexistent.txt"
-        size = duplicate_finder.get_file_size(nonexistent)
+        size = hasher.get_file_size(nonexistent)
         assert size == -1
 
 
 class TestProgressReporting:
     """Test progress reporting functionality."""
     
-    @patch('duplicate_finder.tqdm')
+    @patch('duplicate_finder.scanner.tqdm')
     def test_scan_directory_shows_progress(self, mock_tqdm_class, tmp_path):
         """Test that scanning shows progress bar."""
         # Create some test files
@@ -402,7 +402,7 @@ class TestProgressReporting:
         mock_tqdm_class.side_effect = lambda x, **kwargs: x
         
         with patch('builtins.print') as mock_print:
-            files = duplicate_finder.scan_directory(tmp_path)
+            files = scanner.scan_directory(tmp_path)
         
         # Verify tqdm was called with correct parameters
         mock_tqdm_class.assert_called_once()
@@ -413,7 +413,7 @@ class TestProgressReporting:
         # Verify we found files
         assert len(files) == 3
     
-    @patch('duplicate_finder.tqdm')
+    @patch('duplicate_finder.detector.tqdm')
     def test_find_duplicates_shows_progress(self, mock_tqdm_class, tmp_path):
         """Test that multi-stage comparison shows progress bars."""
         # Create test files
@@ -427,7 +427,7 @@ class TestProgressReporting:
         mock_tqdm_class.side_effect = lambda x, **kwargs: x
         
         with patch('builtins.print'):
-            duplicates, unique_files = duplicate_finder.find_duplicates(files)
+            duplicates, unique_files = detector.find_duplicates(files)
         
         # Verify tqdm was called multiple times for different stages
         assert mock_tqdm_class.call_count >= 1
@@ -449,7 +449,7 @@ class TestArgumentParsing:
     def test_parse_arguments_valid_path(self):
         """Test parsing valid path argument."""
         with patch('sys.argv', ['duplicate_finder.py', '/some/path']):
-            args = duplicate_finder.parse_arguments()
+            args = cli.parse_arguments()
             assert args.path == Path('/some/path')
     
     def test_parse_arguments_no_args(self):
@@ -457,4 +457,4 @@ class TestArgumentParsing:
         with patch('sys.argv', ['duplicate_finder.py']):
             with patch('sys.stderr'):
                 with pytest.raises(SystemExit):
-                    duplicate_finder.parse_arguments()
+                    cli.parse_arguments()
