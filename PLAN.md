@@ -64,14 +64,31 @@ This plan ensures each commit produces a working program with tests, building pr
 - Include tests for different output formats
 - **Working program:** Flexible output options
 
-### 9. perf: Add additional performance optimizations
-- Parallel hashing for multiple files
-- Cache partial hashes
-- Memory-efficient chunked reading
-- Add performance benchmarks in tests
-- **Working program:** Optimized for large directories
+### 9. perf: Add parallel I/O processing optimization
+- Replace sequential file hashing with parallel ThreadPoolExecutor
+- Process multiple files simultaneously for better CPU/disk utilization
+- Adaptive worker count based on system capabilities
+- Maintain progress tracking at file level instead of group level
+- Add tests for parallel processing behavior
+- **Working program:** Much faster hashing for large directories
 
-### 10. docs: Add complete documentation
+### 10. perf: Add memory-efficient stage processing
+- Implement streaming batch processing for size analysis
+- Cache partial hashes to eliminate redundant calculations
+- Process files in batches to reduce memory footprint
+- Early cleanup of single-file size groups
+- Optimize memory usage for very large file sets
+- **Working program:** Constant memory usage regardless of directory size
+
+### 11. perf: Add adaptive worker optimization
+- Dynamic worker count based on system resources (CPU cores, disk type)
+- Balance between I/O throughput and system load
+- Separate worker pools for different operations (partial vs full hashing)
+- Include system detection and performance tuning
+- Add configuration options for manual tuning
+- **Working program:** Optimal performance across different systems
+
+### 12. docs: Add complete documentation
 - README with usage examples
 - Performance characteristics
 - Installation guide
