@@ -105,8 +105,11 @@ class TestDirectoryScanning:
     @patch('duplicate_finder.scanner.tqdm')
     def test_scan_directory_recursive(self, mock_tqdm, tmp_path):
         """Test recursive directory scanning."""
-        # Make tqdm act as a passthrough
-        mock_tqdm.side_effect = lambda x, **kwargs: x
+        # Mock tqdm context manager
+        mock_progress = MagicMock()
+        mock_progress.__enter__ = MagicMock(return_value=mock_progress)
+        mock_progress.__exit__ = MagicMock(return_value=None)
+        mock_tqdm.return_value = mock_progress
         
         # Create nested structure
         (tmp_path / "subdir1").mkdir()
@@ -131,7 +134,11 @@ class TestDirectoryScanning:
     @patch('duplicate_finder.scanner.tqdm')
     def test_scan_directory_empty(self, mock_tqdm, tmp_path):
         """Test scanning empty directory."""
-        mock_tqdm.side_effect = lambda x, **kwargs: x
+        # Mock tqdm context manager
+        mock_progress = MagicMock()
+        mock_progress.__enter__ = MagicMock(return_value=mock_progress)
+        mock_progress.__exit__ = MagicMock(return_value=None)
+        mock_tqdm.return_value = mock_progress
         
         with patch('builtins.print'):
             files = scanner.scan_directory(tmp_path)
@@ -140,7 +147,11 @@ class TestDirectoryScanning:
     @patch('duplicate_finder.scanner.tqdm')
     def test_scan_directory_ignores_directories(self, mock_tqdm, tmp_path):
         """Test that directories are not included in file list."""
-        mock_tqdm.side_effect = lambda x, **kwargs: x
+        # Mock tqdm context manager
+        mock_progress = MagicMock()
+        mock_progress.__enter__ = MagicMock(return_value=mock_progress)
+        mock_progress.__exit__ = MagicMock(return_value=None)
+        mock_tqdm.return_value = mock_progress
         
         subdir = tmp_path / "subdir"
         subdir.mkdir()
@@ -153,6 +164,51 @@ class TestDirectoryScanning:
         assert len(files) == 1
         assert file1 in files
         assert subdir not in files
+    
+    @patch('duplicate_finder.scanner.tqdm')
+    def test_scan_directory_streaming_performance(self, mock_tqdm, tmp_path):
+        """Test that scanning uses streaming approach without collecting all items."""
+        # Mock tqdm context manager
+        mock_progress = MagicMock()
+        mock_progress.__enter__ = MagicMock(return_value=mock_progress)
+        mock_progress.__exit__ = MagicMock(return_value=None)
+        mock_tqdm.return_value = mock_progress
+        
+        # Create multiple files
+        for i in range(10):
+            (tmp_path / f"file_{i}.txt").touch()
+        
+        with patch('builtins.print'):
+            files = scanner.scan_directory(tmp_path)
+        
+        # Verify we found all files
+        assert len(files) == 10
+        
+        # Verify tqdm was used as context manager (not called with iterable)
+        mock_tqdm.assert_called_once()
+        call_kwargs = mock_tqdm.call_args[1]
+        assert 'desc' in call_kwargs
+        assert call_kwargs['desc'] == 'Scanning'
+        
+        # Verify progress bar methods were called
+        assert mock_progress.update.called
+        
+    def test_scan_directory_keyboard_interrupt(self, tmp_path):
+        """Test that scan handles KeyboardInterrupt gracefully."""
+        # Create a file to ensure some scanning happens
+        (tmp_path / "file.txt").touch()
+        
+        with patch('duplicate_finder.scanner.tqdm') as mock_tqdm:
+            # Mock the context manager to raise KeyboardInterrupt
+            mock_progress = MagicMock()
+            mock_progress.__enter__ = MagicMock(return_value=mock_progress)
+            mock_progress.__exit__ = MagicMock(return_value=None)
+            mock_progress.update.side_effect = KeyboardInterrupt("Test interrupt")
+            mock_tqdm.return_value = mock_progress
+            
+            with patch('builtins.print'):
+                with pytest.raises(KeyboardInterrupt):
+                    scanner.scan_directory(tmp_path)
 
 
 class TestDuplicateFinding:
@@ -396,10 +452,11 @@ class TestProgressReporting:
         for i in range(3):
             (tmp_path / f"file{i}.txt").touch()
         
-        # Configure mock
-        mock_progress_bar = MagicMock()
-        mock_tqdm_class.return_value = mock_progress_bar
-        mock_tqdm_class.side_effect = lambda x, **kwargs: x
+        # Mock tqdm context manager
+        mock_progress = MagicMock()
+        mock_progress.__enter__ = MagicMock(return_value=mock_progress)
+        mock_progress.__exit__ = MagicMock(return_value=None)
+        mock_tqdm_class.return_value = mock_progress
         
         with patch('builtins.print') as mock_print:
             files = scanner.scan_directory(tmp_path)
