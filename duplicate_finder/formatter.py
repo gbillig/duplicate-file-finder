@@ -45,14 +45,56 @@ def _calculate_space_savings(duplicates: Dict[str, List[Path]]) -> tuple[int, in
     return total_duplicate_size, potential_savings
 
 
-def format_output(duplicates: Dict[str, List[Path]], unique_files: List[Path]) -> None:
+def format_output(duplicates: Dict[str, List[Path]], unique_files: List[Path], duplicate_folders: List[List[Path]] = None) -> None:
     """
     Format and print the results with enhanced grouping and statistics.
     
     Args:
         duplicates: Dictionary mapping hash to list of duplicate files
         unique_files: List of unique files
+        duplicate_folders: List of duplicate folder groups (optional)
     """
+    if duplicate_folders is None:
+        duplicate_folders = []
+    
+    # Show duplicate folders first (higher priority)
+    if duplicate_folders:
+        print("\n" + "=" * 60)
+        print("📁 DUPLICATE FOLDERS FOUND")
+        print("=" * 60)
+        
+        for group_num, folder_group in enumerate(duplicate_folders, 1):
+            # Calculate total size of folder
+            total_size = 0
+            file_count = 0
+            
+            for folder_path in folder_group:
+                folder_size = 0
+                folder_files = 0
+                try:
+                    for item in folder_path.rglob("*"):
+                        if item.is_file():
+                            folder_size += item.stat().st_size
+                            folder_files += 1
+                    total_size = folder_size  # All folders should have same size
+                    file_count = folder_files  # All folders should have same file count
+                    break  # We only need to calculate once since all folders are identical
+                except OSError:
+                    continue
+            
+            print(f"\n📂 GROUP {group_num}: {len(folder_group)} identical folders")
+            print(f"   Files per folder: {file_count:,}")
+            print(f"   Size per folder: {_format_file_size(total_size)}")
+            
+            # Sort folders by path for consistent display
+            for folder_path in sorted(folder_group):
+                print(f"   • {folder_path}/")
+            
+            # Show space that could be saved for this group
+            if total_size > 0 and len(folder_group) > 1:
+                savings = total_size * (len(folder_group) - 1)
+                print(f"   💾 Potential space savings: {_format_file_size(savings)}")
+    
     if duplicates:
         print("\n" + "=" * 60)
         print("🔍 DUPLICATE FILES FOUND")
@@ -114,17 +156,45 @@ def format_output(duplicates: Dict[str, List[Path]], unique_files: List[Path]) -
     duplicate_count = sum(len(files) for files in duplicates.values())
     total_duplicate_size, potential_savings = _calculate_space_savings(duplicates)
     
+    # Calculate folder statistics
+    folder_duplicate_count = sum(len(group) for group in duplicate_folders)
+    folder_savings = 0
+    for folder_group in duplicate_folders:
+        if len(folder_group) > 1:
+            # Calculate size of one folder
+            try:
+                folder_size = 0
+                for item in folder_group[0].rglob("*"):
+                    if item.is_file():
+                        folder_size += item.stat().st_size
+                folder_savings += folder_size * (len(folder_group) - 1)
+            except OSError:
+                pass
+    
     print(f"📁 Total files scanned: {total_files:,}")
     print(f"👥 Duplicate files: {duplicate_count:,}")
     print(f"📄 Unique files: {len(unique_files):,}")
-    print(f"🔗 Duplicate groups: {len(duplicates):,}")
+    print(f"🔗 Duplicate file groups: {len(duplicates):,}")
+    print(f"📂 Duplicate folders: {folder_duplicate_count:,}")
+    print(f"🗂️  Duplicate folder groups: {len(duplicate_folders):,}")
     
-    if duplicates:
+    if duplicates or duplicate_folders:
         print(f"\n💾 Space Analysis:")
-        print(f"   Total size of duplicates: {_format_file_size(total_duplicate_size)}")
-        print(f"   Potential space savings: {_format_file_size(potential_savings)}")
-        if total_duplicate_size > 0:
-            savings_percent = (potential_savings / total_duplicate_size) * 100
-            print(f"   Efficiency gain: {savings_percent:.1f}% space could be saved")
+        total_combined_savings = potential_savings + folder_savings
+        total_combined_duplicates = total_duplicate_size + (folder_savings / (1 if folder_savings == 0 else len(duplicate_folders)))
+        
+        if duplicates:
+            print(f"   File duplicates size: {_format_file_size(total_duplicate_size)}")
+            print(f"   File savings potential: {_format_file_size(potential_savings)}")
+        
+        if duplicate_folders:
+            print(f"   Folder savings potential: {_format_file_size(folder_savings)}")
+        
+        if total_combined_savings > 0:
+            print(f"   Total potential savings: {_format_file_size(total_combined_savings)}")
+            
+        if total_duplicate_size > 0 and potential_savings > 0:
+            file_savings_percent = (potential_savings / total_duplicate_size) * 100
+            print(f"   File efficiency gain: {file_savings_percent:.1f}% could be saved from files")
     
     print("=" * 60)

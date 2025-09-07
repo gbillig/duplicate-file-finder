@@ -50,10 +50,10 @@ def main():
     print(f"\nFound {len(files)} files.")
     
     # Find duplicates
-    duplicates, unique_files = find_duplicates(files)
+    duplicates, unique_files, duplicate_folders = find_duplicates(files)
     
     # Output results
-    format_output(duplicates, unique_files)
+    format_output(duplicates, unique_files, duplicate_folders)
 
 
 if __name__ == "__main__":

@@ -12,7 +12,7 @@ import os
 # Add parent directory to path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from duplicate_finder import cli, hasher, scanner, detector, formatter
+from duplicate_finder import cli, hasher, scanner, detector, formatter, folder_detector
 import pytest
 
 
@@ -235,7 +235,7 @@ class TestDuplicateFinding:
         file4.write_bytes(b"Unique content")
         
         files = [file1, file2, file3, file4]
-        duplicates, unique_files = detector.find_duplicates(files)
+        duplicates, unique_files, duplicate_folders = detector.find_duplicates(files)
         
         assert len(duplicates) == 1
         assert len(unique_files) == 1
@@ -261,7 +261,7 @@ class TestDuplicateFinding:
         file2.write_bytes(b"Content 2")
         
         files = [file1, file2]
-        duplicates, unique_files = detector.find_duplicates(files)
+        duplicates, unique_files, duplicate_folders = detector.find_duplicates(files)
         
         assert len(duplicates) == 0
         assert len(unique_files) == 2
@@ -280,7 +280,7 @@ class TestDuplicateFinding:
         file2.write_bytes(content)
         
         files = [file1, file2]
-        duplicates, unique_files = detector.find_duplicates(files)
+        duplicates, unique_files, duplicate_folders = detector.find_duplicates(files)
         
         assert len(duplicates) == 1
         assert len(unique_files) == 0
@@ -309,7 +309,7 @@ class TestDuplicateFinding:
         file3.write_bytes(b"Unique")
         
         files = [file1a, file1b, file2a, file2b, file3]
-        duplicates, unique_files = detector.find_duplicates(files)
+        duplicates, unique_files, duplicate_folders = detector.find_duplicates(files)
         
         assert len(duplicates) == 2
         assert len(unique_files) == 1
@@ -366,7 +366,7 @@ class TestMultiStageComparison:
         file3.write_bytes(b"CCC")  # 3 bytes
         
         files = [file1, file2, file3]
-        duplicates, unique_files = detector.find_duplicates(files)
+        duplicates, unique_files, duplicate_folders = detector.find_duplicates(files)
         
         # All files should be unique
         assert len(duplicates) == 0
@@ -391,7 +391,7 @@ class TestMultiStageComparison:
         file2.write_bytes(b"B" * 1000)
         
         files = [file1, file2]
-        duplicates, unique_files = detector.find_duplicates(files)
+        duplicates, unique_files, duplicate_folders = detector.find_duplicates(files)
         
         # Files should be unique
         assert len(duplicates) == 0
@@ -414,7 +414,7 @@ class TestMultiStageComparison:
         file3.write_bytes(common_start + b"Ending1")  # Duplicate of file1
         
         files = [file1, file2, file3]
-        duplicates, unique_files = detector.find_duplicates(files)
+        duplicates, unique_files, duplicate_folders = detector.find_duplicates(files)
         
         # file1 and file3 should be duplicates
         assert len(duplicates) == 1
@@ -484,7 +484,7 @@ class TestProgressReporting:
         mock_tqdm_class.side_effect = lambda x, **kwargs: x
         
         with patch('builtins.print'):
-            duplicates, unique_files = detector.find_duplicates(files)
+            duplicates, unique_files, duplicate_folders = detector.find_duplicates(files)
         
         # Verify tqdm was called multiple times for different stages
         assert mock_tqdm_class.call_count >= 1
@@ -679,3 +679,273 @@ class TestArgumentParsing:
             with patch('sys.stderr'):
                 with pytest.raises(SystemExit):
                     cli.parse_arguments()
+
+
+class TestFolderDuplicateDetection:
+    """Test folder duplicate detection functionality."""
+    
+    def test_create_folder_fingerprint_empty_folder(self, tmp_path):
+        """Test fingerprinting an empty folder."""
+        empty_folder = tmp_path / "empty"
+        empty_folder.mkdir()
+        
+        fingerprint = folder_detector.create_folder_fingerprint(empty_folder, [empty_folder])
+        
+        assert fingerprint.folder_path == empty_folder
+        assert fingerprint.file_count == 0
+        assert fingerprint.total_size == 0
+        assert len(fingerprint.relative_files) == 0
+    
+    def test_create_folder_fingerprint_with_files(self, tmp_path):
+        """Test fingerprinting a folder with files."""
+        folder = tmp_path / "test_folder"
+        folder.mkdir()
+        
+        file1 = folder / "file1.txt"
+        file2 = folder / "subdir" / "file2.txt"
+        file1.write_text("content1")
+        file2.parent.mkdir()
+        file2.write_text("content2")
+        
+        all_files = [file1, file2, folder]
+        fingerprint = folder_detector.create_folder_fingerprint(folder, all_files)
+        
+        assert fingerprint.folder_path == folder
+        assert fingerprint.file_count == 2
+        assert fingerprint.total_size == len("content1") + len("content2")
+        assert "file1.txt" in fingerprint.relative_files
+        assert "subdir/file2.txt" in fingerprint.relative_files
+        assert fingerprint.structure_hash is not None
+    
+    def test_find_duplicate_folders_identical_folders(self, tmp_path):
+        """Test finding identical duplicate folders."""
+        # Create two identical folders
+        folder1 = tmp_path / "folder1"
+        folder2 = tmp_path / "folder2"
+        folder1.mkdir()
+        folder2.mkdir()
+        
+        # Add identical files to both folders
+        (folder1 / "file1.txt").write_text("identical content")
+        (folder1 / "file2.txt").write_text("more content")
+        (folder2 / "file1.txt").write_text("identical content")
+        (folder2 / "file2.txt").write_text("more content")
+        
+        # Create file list and hashes
+        all_files = [
+            folder1 / "file1.txt", folder1 / "file2.txt",
+            folder2 / "file1.txt", folder2 / "file2.txt"
+        ]
+        
+        file_hashes = {}
+        for file_path in all_files:
+            content = file_path.read_bytes()
+            hash_obj = hashlib.sha256(content)
+            file_hashes[file_path] = hash_obj.hexdigest()
+        
+        duplicate_folders = folder_detector.find_duplicate_folders(all_files, file_hashes)
+        
+        assert len(duplicate_folders) == 1
+        assert len(duplicate_folders[0]) == 2
+        assert folder1 in duplicate_folders[0]
+        assert folder2 in duplicate_folders[0]
+    
+    def test_find_duplicate_folders_different_content(self, tmp_path):
+        """Test that folders with different content are not considered duplicates."""
+        folder1 = tmp_path / "folder1"
+        folder2 = tmp_path / "folder2"
+        folder1.mkdir()
+        folder2.mkdir()
+        
+        # Add different files to each folder
+        (folder1 / "file1.txt").write_text("content A")
+        (folder2 / "file1.txt").write_text("content B")  # Different content
+        
+        all_files = [folder1 / "file1.txt", folder2 / "file1.txt"]
+        
+        file_hashes = {}
+        for file_path in all_files:
+            content = file_path.read_bytes()
+            hash_obj = hashlib.sha256(content)
+            file_hashes[file_path] = hash_obj.hexdigest()
+        
+        duplicate_folders = folder_detector.find_duplicate_folders(all_files, file_hashes)
+        
+        assert len(duplicate_folders) == 0
+    
+    def test_find_duplicate_folders_different_structure(self, tmp_path):
+        """Test that folders with different structures are not considered duplicates."""
+        folder1 = tmp_path / "folder1"
+        folder2 = tmp_path / "folder2"
+        folder1.mkdir()
+        folder2.mkdir()
+        
+        # Different file structures - folder1 has 1 file, folder2 has 2 files
+        (folder1 / "file1.txt").write_text("content")
+        (folder2 / "file1.txt").write_text("content")
+        (folder2 / "file2.txt").write_text("different")  # Extra file makes structure different
+        
+        all_files = [folder1 / "file1.txt", folder2 / "file1.txt", folder2 / "file2.txt"]
+        
+        file_hashes = {}
+        for file_path in all_files:
+            content = file_path.read_bytes()
+            hash_obj = hashlib.sha256(content)
+            file_hashes[file_path] = hash_obj.hexdigest()
+        
+        duplicate_folders = folder_detector.find_duplicate_folders(all_files, file_hashes)
+        
+        assert len(duplicate_folders) == 0
+    
+    def test_get_files_in_duplicate_folders(self, tmp_path):
+        """Test getting all files contained in duplicate folders."""
+        folder1 = tmp_path / "folder1"
+        folder2 = tmp_path / "folder2"
+        folder3 = tmp_path / "folder3"
+        folder1.mkdir()
+        folder2.mkdir()
+        folder3.mkdir()
+        
+        file1 = folder1 / "file1.txt"
+        file2 = folder2 / "file2.txt" 
+        file3 = folder3 / "file3.txt"
+        file1.write_text("content")
+        file2.write_text("content") 
+        file3.write_text("different")
+        
+        all_files = [file1, file2, file3]
+        duplicate_folders = [[folder1, folder2]]  # folder1 and folder2 are duplicates
+        
+        files_in_duplicates = folder_detector.get_files_in_duplicate_folders(duplicate_folders, all_files)
+        
+        assert file1 in files_in_duplicates
+        assert file2 in files_in_duplicates
+        assert file3 not in files_in_duplicates
+    
+    def test_is_folder_duplicate(self, tmp_path):
+        """Test checking if a folder is part of duplicate group."""
+        folder1 = tmp_path / "folder1"
+        folder2 = tmp_path / "folder2"
+        folder3 = tmp_path / "folder3"
+        
+        duplicate_folders = [[folder1, folder2]]
+        
+        assert folder_detector.is_folder_duplicate(folder1, duplicate_folders) == True
+        assert folder_detector.is_folder_duplicate(folder2, duplicate_folders) == True
+        assert folder_detector.is_folder_duplicate(folder3, duplicate_folders) == False
+    
+    def test_calculate_folder_content_hash(self, tmp_path):
+        """Test calculating folder content hash based on file hashes."""
+        folder = tmp_path / "test_folder"
+        folder.mkdir()
+        
+        file1 = folder / "file1.txt"
+        file2 = folder / "file2.txt"
+        file1.write_text("content1")
+        file2.write_text("content2")
+        
+        fingerprint = folder_detector.FolderFingerprint(folder)
+        fingerprint.relative_files = {"file1.txt", "file2.txt"}
+        
+        file_hashes = {
+            file1: "hash1",
+            file2: "hash2"
+        }
+        
+        content_hash = folder_detector.calculate_folder_content_hash(fingerprint, file_hashes)
+        
+        assert content_hash is not None
+        assert len(content_hash) == 64  # SHA256 hex length
+    
+    def test_calculate_folder_content_hash_missing_file_hash(self, tmp_path):
+        """Test that missing file hash returns None."""
+        folder = tmp_path / "test_folder"
+        folder.mkdir()
+        
+        file1 = folder / "file1.txt"
+        file1.write_text("content1")
+        
+        fingerprint = folder_detector.FolderFingerprint(folder)
+        fingerprint.relative_files = {"file1.txt"}
+        
+        file_hashes = {}  # Empty - missing hash for file1
+        
+        content_hash = folder_detector.calculate_folder_content_hash(fingerprint, file_hashes)
+        
+        assert content_hash is None
+
+
+class TestIntegratedFolderDetection:
+    """Test integrated folder detection with main duplicate detection flow."""
+    
+    @patch('duplicate_finder.detector.tqdm')
+    @patch('builtins.print')
+    def test_find_duplicates_with_folder_detection(self, mock_print, mock_tqdm, tmp_path):
+        """Test that main find_duplicates function includes folder detection."""
+        mock_tqdm.side_effect = lambda x, **kwargs: x
+        
+        # Create duplicate folders
+        folder1 = tmp_path / "duplicate_folder_1"
+        folder2 = tmp_path / "duplicate_folder_2"
+        folder1.mkdir()
+        folder2.mkdir()
+        
+        # Add identical files
+        (folder1 / "file1.txt").write_text("identical content")
+        (folder2 / "file1.txt").write_text("identical content")
+        
+        all_files = [folder1 / "file1.txt", folder2 / "file1.txt"]
+        
+        # Call main detection function
+        duplicates, unique_files, duplicate_folders = detector.find_duplicates(all_files)
+        
+        # Should find folder duplicates
+        assert len(duplicate_folders) == 1
+        assert len(duplicate_folders[0]) == 2
+        assert folder1 in duplicate_folders[0]
+        assert folder2 in duplicate_folders[0]
+        
+        # Files should be removed from individual duplicates since they're part of folder duplicates
+        assert len(duplicates) == 0
+        assert len(unique_files) == 0
+    
+    @patch('duplicate_finder.detector.tqdm')
+    @patch('builtins.print') 
+    def test_mixed_folder_and_file_duplicates(self, mock_print, mock_tqdm, tmp_path):
+        """Test detection with both folder and individual file duplicates."""
+        mock_tqdm.side_effect = lambda x, **kwargs: x
+        
+        # Create duplicate folders
+        folder1 = tmp_path / "dup_folder_1"
+        folder2 = tmp_path / "dup_folder_2"
+        folder1.mkdir()
+        folder2.mkdir()
+        
+        (folder1 / "file1.txt").write_text("folder content")
+        (folder2 / "file1.txt").write_text("folder content")
+        
+        # Create individual duplicate files outside folders
+        individual1 = tmp_path / "individual1.txt"
+        individual2 = tmp_path / "individual2.txt"
+        individual1.write_text("individual content")
+        individual2.write_text("individual content")
+        
+        all_files = [
+            folder1 / "file1.txt", folder2 / "file1.txt",
+            individual1, individual2
+        ]
+        
+        duplicates, unique_files, duplicate_folders = detector.find_duplicates(all_files)
+        
+        # Should find both folder and individual duplicates
+        assert len(duplicate_folders) == 1
+        assert len(duplicates) == 1
+        
+        # Folder duplicates
+        assert folder1 in duplicate_folders[0]
+        assert folder2 in duplicate_folders[0]
+        
+        # Individual duplicates
+        individual_dup_group = list(duplicates.values())[0]
+        assert individual1 in individual_dup_group
+        assert individual2 in individual_dup_group

@@ -9,23 +9,26 @@ from typing import Dict, List, Tuple
 from tqdm import tqdm
 
 from .hasher import calculate_file_hash, get_file_size
+from .folder_detector import find_duplicate_folders, get_files_in_duplicate_folders
 
 
-def find_duplicates(files: List[Path]) -> Tuple[Dict[str, List[Path]], List[Path]]:
+def find_duplicates(files: List[Path]) -> Tuple[Dict[str, List[Path]], List[Path], List[List[Path]]]:
     """
-    Find duplicate files using multi-stage comparison.
+    Find duplicate files and folders using multi-stage comparison.
     
     Stage 1: Group by file size
     Stage 2: Partial hash (first 4KB) for same-size files
     Stage 3: Full hash only when partial hashes match
+    Stage 4: Smart folder duplicate detection
     
     Args:
         files: List of file paths to check
         
     Returns:
-        Tuple of (duplicates_dict, unique_files)
+        Tuple of (duplicates_dict, unique_files, duplicate_folders)
         duplicates_dict: hash -> list of duplicate file paths
         unique_files: list of files with no duplicates
+        duplicate_folders: list of duplicate folder groups
     """
     print("\n=== Stage 1: Grouping files by size ===")
     
@@ -47,7 +50,7 @@ def find_duplicates(files: List[Path]) -> Tuple[Dict[str, List[Path]], List[Path
     # Early exit if no potential duplicates
     if files_needing_hash == 0:
         unique_files = [f for group in size_to_files.values() for f in group]
-        return {}, unique_files
+        return {}, unique_files, []
     
     print("\n=== Stage 2: Partial hash comparison ===")
     
@@ -120,4 +123,47 @@ def find_duplicates(files: List[Path]) -> Tuple[Dict[str, List[Path]], List[Path
     
     print(f"  Optimization complete!")
     
-    return duplicates, unique_files
+    print("\n=== Stage 4: Smart folder duplicate detection ===")
+    
+    # Create a dictionary of file hashes for folder detection
+    all_file_hashes = {}
+    for hash_val, file_list in full_hash_to_files.items():
+        for file_path in file_list:
+            all_file_hashes[file_path] = hash_val
+    
+    # Add files that were unique by size or partial hash
+    for size, file_group in size_to_files.items():
+        for file_path in file_group:
+            if file_path not in all_file_hashes:
+                # For unique files, we still need their hash for folder comparison
+                full_hash = calculate_file_hash(file_path, partial=False)
+                if full_hash:
+                    all_file_hashes[file_path] = full_hash
+    
+    # Find duplicate folders
+    duplicate_folders = find_duplicate_folders(files, all_file_hashes)
+    
+    if duplicate_folders:
+        print(f"  Found {len(duplicate_folders)} groups of duplicate folders")
+        
+        # Remove files that are in duplicate folders from individual file duplicates
+        files_in_duplicate_folders = get_files_in_duplicate_folders(duplicate_folders, files)
+        
+        # Filter out individual file duplicates that are part of folder duplicates
+        filtered_duplicates = {}
+        for hash_val, file_list in duplicates.items():
+            filtered_files = [f for f in file_list if f not in files_in_duplicate_folders]
+            if len(filtered_files) > 1:
+                filtered_duplicates[hash_val] = filtered_files
+            elif len(filtered_files) == 1:
+                # Single file remaining after folder filtering becomes unique
+                unique_files.extend(filtered_files)
+        
+        duplicates = filtered_duplicates
+        
+        # Also remove folder-duplicate files from unique files list
+        unique_files = [f for f in unique_files if f not in files_in_duplicate_folders]
+    else:
+        print("  No duplicate folders found")
+    
+    return duplicates, unique_files, duplicate_folders
