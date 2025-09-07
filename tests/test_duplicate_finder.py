@@ -500,6 +500,170 @@ class TestProgressReporting:
         assert any('sizes' in desc.lower() for desc in descriptions)  # Stage 1
 
 
+class TestOutputFormatting:
+    """Test output formatting functionality."""
+    
+    def test_format_file_size(self):
+        """Test human-readable file size formatting."""
+        from duplicate_finder.formatter import _format_file_size
+        
+        assert _format_file_size(512) == "512 bytes"
+        assert _format_file_size(1024) == "1.0 KB"
+        assert _format_file_size(1536) == "1.5 KB"
+        assert _format_file_size(1024 * 1024) == "1.0 MB"
+        assert _format_file_size(2.5 * 1024 * 1024) == "2.5 MB"
+        assert _format_file_size(1024 * 1024 * 1024) == "1.0 GB"
+    
+    def test_get_file_info(self, tmp_path):
+        """Test getting file size and formatted info."""
+        from duplicate_finder.formatter import _get_file_info
+        
+        # Test normal file
+        test_file = tmp_path / "test.txt"
+        test_content = b"Hello, World!"
+        test_file.write_bytes(test_content)
+        
+        size, size_str = _get_file_info(test_file)
+        assert size == len(test_content)
+        assert size_str == "13 bytes"
+        
+        # Test nonexistent file
+        nonexistent = tmp_path / "nonexistent.txt"
+        size, size_str = _get_file_info(nonexistent)
+        assert size == 0
+        assert size_str == "unknown size"
+    
+    def test_calculate_space_savings(self, tmp_path):
+        """Test space savings calculation."""
+        from duplicate_finder.formatter import _calculate_space_savings
+        
+        # Create test files
+        file1 = tmp_path / "file1.txt"
+        file2 = tmp_path / "file2.txt"
+        file3 = tmp_path / "file3.txt"
+        
+        content = b"A" * 1000  # 1000 bytes
+        file1.write_bytes(content)
+        file2.write_bytes(content)
+        file3.write_bytes(content)
+        
+        # Test with duplicate groups
+        duplicates = {
+            "hash1": [file1, file2],  # 2 files, 1000 bytes each
+            "hash2": [file3],         # 1 file (no savings)
+        }
+        
+        total_size, savings = _calculate_space_savings(duplicates)
+        assert total_size == 2000  # Only counts duplicates
+        assert savings == 1000     # Save 1 file worth
+    
+    def test_format_output_with_duplicates(self, tmp_path, capsys):
+        """Test output formatting with duplicate files."""
+        # Create test files
+        file1 = tmp_path / "dup1.txt"
+        file2 = tmp_path / "dup2.txt"
+        file3 = tmp_path / "unique.txt"
+        
+        file1.write_bytes(b"duplicate content")
+        file2.write_bytes(b"duplicate content")
+        file3.write_bytes(b"unique content")
+        
+        duplicates = {"hash123": [file1, file2]}
+        unique_files = [file3]
+        
+        formatter.format_output(duplicates, unique_files)
+        captured = capsys.readouterr()
+        
+        # Check key output elements
+        assert "DUPLICATE FILES FOUND" in captured.out
+        assert "GROUP 1" in captured.out
+        assert "2 identical files" in captured.out
+        assert str(file1) in captured.out
+        assert str(file2) in captured.out
+        assert "UNIQUE FILES" in captured.out
+        assert "SUMMARY STATISTICS" in captured.out
+        assert "Total files scanned: 3" in captured.out
+        assert "Duplicate files: 2" in captured.out
+        assert "Unique files: 1" in captured.out
+        assert "Potential space savings" in captured.out
+    
+    def test_format_output_no_duplicates(self, tmp_path, capsys):
+        """Test output formatting with no duplicates."""
+        # Create unique files
+        file1 = tmp_path / "unique1.txt"
+        file2 = tmp_path / "unique2.txt"
+        
+        file1.write_bytes(b"content 1")
+        file2.write_bytes(b"content 2")
+        
+        duplicates = {}
+        unique_files = [file1, file2]
+        
+        formatter.format_output(duplicates, unique_files)
+        captured = capsys.readouterr()
+        
+        # Check output
+        assert "No duplicate files found" in captured.out
+        assert "UNIQUE FILES" in captured.out
+        assert "Found 2 unique files" in captured.out
+        assert "Total files scanned: 2" in captured.out
+        assert "Duplicate files: 0" in captured.out
+        assert "Unique files: 2" in captured.out
+        # Should not have space analysis section
+        assert "Space Analysis" not in captured.out
+    
+    def test_format_output_many_unique_files(self, tmp_path, capsys):
+        """Test output formatting with many unique files."""
+        # Create many unique files
+        unique_files = []
+        for i in range(25):
+            file_path = tmp_path / f"unique_{i}.txt"
+            file_path.write_bytes(f"content {i}".encode())
+            unique_files.append(file_path)
+        
+        duplicates = {}
+        
+        formatter.format_output(duplicates, unique_files)
+        captured = capsys.readouterr()
+        
+        # Should show sample and count
+        assert "Found 25 unique files" in captured.out
+        assert "Sample of unique files" in captured.out
+        assert "and 15 more unique files" in captured.out
+    
+    def test_duplicate_groups_sorted_by_size(self, tmp_path, capsys):
+        """Test that duplicate groups are sorted by size (largest first)."""
+        # Create files of different sizes
+        small1 = tmp_path / "small1.txt"
+        small2 = tmp_path / "small2.txt"
+        large1 = tmp_path / "large1.txt"
+        large2 = tmp_path / "large2.txt"
+        
+        small_content = b"small"
+        large_content = b"A" * 1000
+        
+        small1.write_bytes(small_content)
+        small2.write_bytes(small_content)
+        large1.write_bytes(large_content)
+        large2.write_bytes(large_content)
+        
+        duplicates = {
+            "small_hash": [small1, small2],
+            "large_hash": [large1, large2],
+        }
+        
+        formatter.format_output(duplicates, [])
+        captured = capsys.readouterr()
+        
+        # Large files should appear first (GROUP 1)
+        output_lines = captured.out.split('\n')
+        large_group_line = next(i for i, line in enumerate(output_lines) if "GROUP 1" in line)
+        small_group_line = next(i for i, line in enumerate(output_lines) if "GROUP 2" in line)
+        
+        assert large_group_line < small_group_line
+        assert "1000 bytes" in output_lines[large_group_line] or "1.0 KB" in output_lines[large_group_line]
+
+
 class TestArgumentParsing:
     """Test command-line argument parsing."""
     
