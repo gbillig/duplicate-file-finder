@@ -22,32 +22,13 @@ A Python command-line tool that efficiently detects duplicate files within a spe
 
 ## Implementation Plan
 
-### Phase 1: Core Structure
-- Set up command-line argument parsing using `argparse`
-- Create main application class with clear separation of concerns
-- Implement basic file traversal with `pathlib`
+See @PLAN.md for the detailed commit-by-commit implementation plan.
 
-### Phase 2: File Comparison Logic
-- Implement size-based grouping
-- Add partial hash comparison (first 4KB)
-- Implement full hash comparison for potential duplicates
-- Use SHA256 for hashing
-
-### Phase 3: Smart Folder Detection
-- Detect when entire folder structures are duplicated
-- Implement folder fingerprinting (based on relative paths and file hashes)
-- Optimize output to show folder-level duplicates
-
-### Phase 4: Output and Reporting
-- Format results clearly (duplicates grouped together)
-- Add option for different output formats (text, JSON)
-- Include file paths, sizes, and duplicate counts
-
-### Phase 5: Optimization and Polish
-- Add progress bars for long operations
-- Implement error handling for permission issues
-- Add verbose/quiet modes
-- Add dry-run option
+The implementation follows these principles:
+- Each commit produces a working program
+- Tests are included with each feature
+- Progressive enhancement from MVP to full solution
+- Core requirements prioritized (especially smart folder detection)
 
 ## Python Best Practices for CLI Applications
 
