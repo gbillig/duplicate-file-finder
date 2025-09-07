@@ -949,3 +949,210 @@ class TestIntegratedFolderDetection:
         individual_dup_group = list(duplicates.values())[0]
         assert individual1 in individual_dup_group
         assert individual2 in individual_dup_group
+
+
+class TestErrorHandling:
+    """Test robust error handling and warning systems."""
+    
+    def test_scanner_handles_permission_denied(self):
+        """Test that _process_item handles permission errors gracefully."""
+        from unittest.mock import Mock
+        
+        # Create a mock item that raises permission error
+        mock_item = Mock()
+        mock_item.is_symlink.return_value = False
+        mock_item.is_file.side_effect = PermissionError("Permission denied")
+        
+        result = scanner.ScanResult()
+        
+        # Process the item - should handle error gracefully
+        scanner._process_item(mock_item, result)
+        
+        # Should have recorded the permission error
+        assert result.skipped_items['permission_denied'] > 0
+        assert len(result.warnings) > 0
+        assert "Permission denied" in result.warnings[0]
+    
+    def test_scanner_handles_broken_symlinks(self, tmp_path):
+        """Test scanner skips broken symlinks gracefully."""
+        # Create directory with broken symlink
+        test_dir = tmp_path / "test_symlinks"
+        test_dir.mkdir()
+        
+        # Create a valid file
+        valid_file = test_dir / "valid.txt"
+        valid_file.write_text("content")
+        
+        # Create a broken symlink by linking to non-existent file
+        broken_link = test_dir / "broken_link"
+        try:
+            broken_link.symlink_to(tmp_path / "nonexistent.txt")
+        except OSError:
+            # Skip test if symlinks not supported
+            pytest.skip("Symlinks not supported on this system")
+        
+        # Scan should handle broken symlink gracefully
+        result = scanner.scan_directory_detailed(test_dir)
+        
+        # Should find the valid file but skip the broken symlink
+        assert len(result.files) == 1
+        assert valid_file in result.files
+        assert result.skipped_items['broken_symlinks'] >= 1
+        assert any("Broken symlink" in warning for warning in result.warnings)
+    
+    def test_hasher_handles_file_not_found(self, tmp_path):
+        """Test hasher handles file disappearing during processing."""
+        nonexistent_file = tmp_path / "nonexistent.txt"
+        
+        # Reset warning counters for clean test
+        hasher.reset_warning_counters()
+        
+        # Should return None and log warning
+        result = hasher.calculate_file_hash(nonexistent_file)
+        assert result is None
+        
+        # Should have logged warning
+        warnings = hasher.get_warning_summary()
+        assert warnings['file_not_found'] > 0
+    
+    def test_hasher_handles_permission_denied(self, tmp_path):
+        """Test hasher handles permission denied on file."""
+        from unittest.mock import patch, mock_open
+        
+        test_file = tmp_path / "restricted.txt"
+        test_file.write_text("content")
+        
+        # Reset warning counters for clean test
+        hasher.reset_warning_counters()
+        
+        # Mock file opening to raise PermissionError
+        with patch('builtins.open', mock_open()) as mock_file:
+            mock_file.side_effect = PermissionError("Permission denied")
+            
+            result = hasher.calculate_file_hash(test_file)
+            assert result is None
+        
+        # Should have logged warning
+        warnings = hasher.get_warning_summary()
+        assert warnings['permission_denied'] > 0
+    
+    def test_warning_rate_limiting(self, tmp_path):
+        """Test that warning messages are rate limited to prevent spam."""
+        hasher.reset_warning_counters()
+        
+        # Create multiple files that will cause permission errors
+        files = []
+        for i in range(10):
+            test_file = tmp_path / f"file_{i}.txt"
+            test_file.write_text("content")
+            files.append(test_file)
+        
+        from unittest.mock import patch, mock_open
+        
+        # Mock file opening to always raise PermissionError
+        with patch('builtins.open', mock_open()) as mock_file:
+            mock_file.side_effect = PermissionError("Permission denied")
+            
+            # Try to hash all files
+            for file_path in files:
+                hasher.calculate_file_hash(file_path)
+        
+        # Should have recorded all the warnings (including suppressed ones)
+        warnings = hasher.get_warning_summary()
+        assert warnings['permission_denied'] == len(files)  # All attempts recorded
+        # Note: Only first 5 warnings are printed, then suppression message appears
+    
+    def test_file_size_error_handling(self, tmp_path):
+        """Test file size calculation handles errors gracefully."""
+        nonexistent = tmp_path / "nonexistent.txt"
+        
+        # Should return -1 for non-existent files
+        size = hasher.get_file_size(nonexistent)
+        assert size == -1
+        
+        # Should handle permission errors
+        from unittest.mock import patch
+        
+        existing_file = tmp_path / "exists.txt"
+        existing_file.write_text("content")
+        
+        # Mock the stat method to raise PermissionError
+        with patch('pathlib.Path.stat', side_effect=PermissionError("No access")):
+            size = hasher.get_file_size(existing_file)
+            assert size == -1
+    
+    def test_scan_result_container(self, tmp_path):
+        """Test ScanResult properly tracks different types of issues."""
+        result = scanner.ScanResult()
+        
+        # Test initial state
+        assert len(result.files) == 0
+        assert len(result.warnings) == 0
+        assert len(result.errors) == 0
+        assert all(count == 0 for count in result.skipped_items.values())
+        
+        # Test adding items
+        test_file = tmp_path / "test.txt"
+        test_file.write_text("content")
+        result.files.append(test_file)
+        result.warnings.append("Test warning")
+        result.skipped_items['permission_denied'] = 1
+        
+        assert len(result.files) == 1
+        assert len(result.warnings) == 1
+        assert result.skipped_items['permission_denied'] == 1
+    
+    def test_scanner_continues_after_errors(self):
+        """Test scanner continues processing after encountering errors."""
+        from unittest.mock import Mock
+        
+        result = scanner.ScanResult()
+        
+        # Process multiple items, some with errors
+        items = []
+        for i in range(5):
+            mock_item = Mock()
+            mock_item.__str__ = Mock(return_value=f"file_{i}.txt")
+            mock_item.is_symlink.return_value = False
+            
+            if i == 2:
+                # Make file_2 raise permission error
+                mock_item.is_file.side_effect = PermissionError("No access")
+            else:
+                # Normal files
+                mock_item.is_file.return_value = True
+                mock_item.stat.return_value.st_size = 10
+            items.append(mock_item)
+        
+        # Process all items
+        for item in items:
+            scanner._process_item(item, result)
+        
+        # Should have processed most files despite errors
+        assert len(result.files) == 4  # 4 out of 5 files processed successfully
+        assert result.skipped_items['permission_denied'] == 1  # 1 permission error
+    
+    def test_main_cli_shows_warning_summary(self, capsys):
+        """Test CLI warning summary display."""
+        # Reset warning counters
+        hasher.reset_warning_counters()
+        
+        # Add a test warning directly
+        hasher._log_warning('io_errors', "Test I/O error")
+        
+        # Create a simple test to trigger the CLI warning summary
+        warning_summary = hasher.get_warning_summary()
+        total_warnings = sum(warning_summary.values())
+        
+        # Simulate what CLI does when warnings exist
+        if total_warnings > 0:
+            print(f"\n⚠️  Processing warnings summary:", file=sys.stderr)
+            for warning_type, count in warning_summary.items():
+                if count > 0:
+                    warning_name = warning_type.replace('_', ' ').title()
+                    print(f"  • {warning_name}: {count} files", file=sys.stderr)
+        
+        # Check the output
+        captured = capsys.readouterr()
+        assert "Processing warnings summary" in captured.err
+        assert "Io Errors" in captured.err

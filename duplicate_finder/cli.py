@@ -10,6 +10,7 @@ from pathlib import Path
 from .scanner import scan_directory
 from .detector import find_duplicates
 from .formatter import format_output
+from .hasher import get_warning_summary
 
 
 def parse_arguments() -> argparse.Namespace:
@@ -54,6 +55,16 @@ def main():
     
     # Output results
     format_output(duplicates, unique_files, duplicate_folders)
+    
+    # Show final warning summary from hashing operations
+    warning_summary = get_warning_summary()
+    total_hash_warnings = sum(warning_summary.values())
+    if total_hash_warnings > 0:
+        print(f"\n⚠️  Processing warnings summary:", file=sys.stderr)
+        for warning_type, count in warning_summary.items():
+            if count > 0:
+                warning_name = warning_type.replace('_', ' ').title()
+                print(f"  • {warning_name}: {count} files", file=sys.stderr)
 
 
 if __name__ == "__main__":

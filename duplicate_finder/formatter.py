@@ -73,13 +73,18 @@ def format_output(duplicates: Dict[str, List[Path]], unique_files: List[Path], d
                 folder_files = 0
                 try:
                     for item in folder_path.rglob("*"):
-                        if item.is_file():
-                            folder_size += item.stat().st_size
-                            folder_files += 1
+                        try:
+                            if item.is_file():
+                                size = item.stat().st_size
+                                folder_size += size
+                                folder_files += 1
+                        except (PermissionError, FileNotFoundError, OSError):
+                            # Skip files we can't access but continue counting others
+                            continue
                     total_size = folder_size  # All folders should have same size
                     file_count = folder_files  # All folders should have same file count
                     break  # We only need to calculate once since all folders are identical
-                except OSError:
+                except (PermissionError, OSError):
                     continue
             
             print(f"\n📂 GROUP {group_num}: {len(folder_group)} identical folders")
@@ -165,10 +170,14 @@ def format_output(duplicates: Dict[str, List[Path]], unique_files: List[Path], d
             try:
                 folder_size = 0
                 for item in folder_group[0].rglob("*"):
-                    if item.is_file():
-                        folder_size += item.stat().st_size
+                    try:
+                        if item.is_file():
+                            folder_size += item.stat().st_size
+                    except (PermissionError, FileNotFoundError, OSError):
+                        # Skip files we can't access but continue counting others
+                        continue
                 folder_savings += folder_size * (len(folder_group) - 1)
-            except OSError:
+            except (PermissionError, OSError):
                 pass
     
     print(f"📁 Total files scanned: {total_files:,}")
