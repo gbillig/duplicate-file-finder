@@ -2,6 +2,7 @@
 Output formatting for duplicate detection results.
 """
 
+import json
 from pathlib import Path
 from typing import Dict, List
 
@@ -45,7 +46,7 @@ def _calculate_space_savings(duplicates: Dict[str, List[Path]]) -> tuple[int, in
     return total_duplicate_size, potential_savings
 
 
-def format_output(duplicates: Dict[str, List[Path]], unique_files: List[Path], duplicate_folders: List[List[Path]] = None) -> None:
+def format_output(duplicates: Dict[str, List[Path]], unique_files: List[Path], duplicate_folders: List[List[Path]] = None, quiet: bool = False) -> None:
     """
     Format and print the results with enhanced grouping and statistics.
     
@@ -207,3 +208,135 @@ def format_output(duplicates: Dict[str, List[Path]], unique_files: List[Path], d
             print(f"   File efficiency gain: {file_savings_percent:.1f}% could be saved from files")
     
     print("=" * 60)
+
+
+def format_json_output(duplicates: Dict[str, List[Path]], unique_files: List[Path], duplicate_folders: List[List[Path]] = None) -> None:
+    """
+    Format and print the results as JSON for scripting and programmatic access.
+    
+    Args:
+        duplicates: Dictionary mapping hash to list of duplicate files
+        unique_files: List of unique files
+        duplicate_folders: List of lists containing duplicate folder paths
+    """
+    duplicate_folders = duplicate_folders or []
+    
+    # Convert Path objects to strings for JSON serialization
+    json_duplicates = []
+    for hash_val, file_list in duplicates.items():
+        group = []
+        for file_path in file_list:
+            try:
+                size = file_path.stat().st_size
+                group.append({
+                    "path": str(file_path),
+                    "size": size,
+                    "size_formatted": _format_file_size(size)
+                })
+            except OSError:
+                group.append({
+                    "path": str(file_path),
+                    "size": 0,
+                    "size_formatted": "unknown"
+                })
+        if group:
+            json_duplicates.append({
+                "hash": hash_val,
+                "files": group,
+                "count": len(group)
+            })
+    
+    # Convert duplicate folders
+    json_duplicate_folders = []
+    for folder_group in duplicate_folders:
+        group = []
+        for folder_path in folder_group:
+            try:
+                # Calculate folder size
+                folder_size = 0
+                file_count = 0
+                for item in folder_path.rglob("*"):
+                    try:
+                        if item.is_file():
+                            folder_size += item.stat().st_size
+                            file_count += 1
+                    except (PermissionError, FileNotFoundError, OSError):
+                        continue
+                
+                group.append({
+                    "path": str(folder_path),
+                    "size": folder_size,
+                    "size_formatted": _format_file_size(folder_size),
+                    "file_count": file_count
+                })
+            except (PermissionError, OSError):
+                group.append({
+                    "path": str(folder_path),
+                    "size": 0,
+                    "size_formatted": "unknown",
+                    "file_count": 0
+                })
+        
+        if group:
+            json_duplicate_folders.append({
+                "folders": group,
+                "count": len(group)
+            })
+    
+    # Convert unique files
+    json_unique_files = []
+    for file_path in unique_files:
+        try:
+            size = file_path.stat().st_size
+            json_unique_files.append({
+                "path": str(file_path),
+                "size": size,
+                "size_formatted": _format_file_size(size)
+            })
+        except OSError:
+            json_unique_files.append({
+                "path": str(file_path),
+                "size": 0,
+                "size_formatted": "unknown"
+            })
+    
+    # Calculate statistics
+    total_duplicate_size, potential_savings = _calculate_space_savings(duplicates)
+    
+    # Calculate folder savings
+    folder_savings = 0
+    for folder_group in duplicate_folders:
+        if len(folder_group) > 1:
+            try:
+                folder_size = 0
+                for item in folder_group[0].rglob("*"):
+                    try:
+                        if item.is_file():
+                            folder_size += item.stat().st_size
+                    except (PermissionError, FileNotFoundError, OSError):
+                        continue
+                folder_savings += folder_size * (len(folder_group) - 1)
+            except (PermissionError, OSError):
+                pass
+    
+    # Create output dictionary
+    output = {
+        "duplicate_files": json_duplicates,
+        "duplicate_folders": json_duplicate_folders,
+        "unique_files": json_unique_files,
+        "statistics": {
+            "total_files": sum(len(files) for files in duplicates.values()) + len(unique_files),
+            "duplicate_files_count": sum(len(files) for files in duplicates.values()),
+            "unique_files_count": len(unique_files),
+            "duplicate_groups_count": len(duplicates),
+            "duplicate_folders_count": sum(len(group) for group in duplicate_folders),
+            "duplicate_folder_groups_count": len(duplicate_folders),
+            "total_duplicate_size": total_duplicate_size,
+            "potential_file_savings": potential_savings,
+            "potential_folder_savings": folder_savings,
+            "total_potential_savings": potential_savings + folder_savings
+        }
+    }
+    
+    # Print as formatted JSON
+    print(json.dumps(output, indent=2))

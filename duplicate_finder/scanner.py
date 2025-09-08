@@ -24,7 +24,7 @@ class ScanResult:
         }
 
 
-def scan_directory(directory: Path) -> List[Path]:
+def scan_directory(directory: Path, verbose: bool = False, quiet: bool = False) -> List[Path]:
     """
     Recursively scan directory for all files using streaming approach.
     
@@ -34,14 +34,16 @@ def scan_directory(directory: Path) -> List[Path]:
     
     Args:
         directory: Path to directory to scan
+        verbose: Enable verbose output
+        quiet: Suppress non-error output
         
     Returns:
         List of Path objects for all files found
     """
-    result = scan_directory_detailed(directory)
+    result = scan_directory_detailed(directory, verbose=verbose, quiet=quiet)
     
-    # Print warnings if any
-    if result.warnings:
+    # Print warnings if any (unless quiet mode)
+    if not quiet and result.warnings:
         print(f"\n⚠️  Scan completed with {len(result.warnings)} warnings:", file=sys.stderr)
         for warning in result.warnings[:5]:  # Show first 5 warnings
             print(f"  • {warning}", file=sys.stderr)
@@ -60,22 +62,27 @@ def scan_directory(directory: Path) -> List[Path]:
     return result.files
 
 
-def scan_directory_detailed(directory: Path) -> ScanResult:
+def scan_directory_detailed(directory: Path, verbose: bool = False, quiet: bool = False) -> ScanResult:
     """
     Recursively scan directory with detailed error tracking and robust error handling.
     
     Args:
         directory: Path to directory to scan
+        verbose: Enable verbose output
+        quiet: Suppress non-error output
         
     Returns:
         ScanResult containing files, warnings, and error statistics
     """
     result = ScanResult()
-    print("Scanning for files...")
+    if not quiet:
+        print("Scanning for files...")
     
     try:
         items_processed = 0
-        with tqdm(desc="Scanning", unit=" items", leave=False) as pbar:
+        # Only show progress bar if not quiet
+        progress_bar = tqdm(desc="Scanning", unit=" items", leave=False, disable=quiet)
+        with progress_bar as pbar:
             try:
                 for item in directory.rglob("*"):
                     items_processed += 1

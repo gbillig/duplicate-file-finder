@@ -1156,3 +1156,176 @@ class TestErrorHandling:
         captured = capsys.readouterr()
         assert "Processing warnings summary" in captured.err
         assert "Io Errors" in captured.err
+
+
+class TestOutputFormats:
+    """Test different output format options."""
+    
+    def test_parse_arguments_output_format_text(self):
+        """Test parsing --output text argument."""
+        with patch('sys.argv', ['duplicate_finder.py', '/some/path', '--output', 'text']):
+            args = cli.parse_arguments()
+            assert args.output == 'text'
+    
+    def test_parse_arguments_output_format_json(self):
+        """Test parsing --output json argument."""
+        with patch('sys.argv', ['duplicate_finder.py', '/some/path', '--output', 'json']):
+            args = cli.parse_arguments()
+            assert args.output == 'json'
+    
+    def test_parse_arguments_output_format_default(self):
+        """Test default output format is text."""
+        with patch('sys.argv', ['duplicate_finder.py', '/some/path']):
+            args = cli.parse_arguments()
+            assert args.output == 'text'
+    
+    def test_parse_arguments_verbose_flag(self):
+        """Test parsing --verbose flag."""
+        with patch('sys.argv', ['duplicate_finder.py', '/some/path', '--verbose']):
+            args = cli.parse_arguments()
+            assert args.verbose is True
+        
+        with patch('sys.argv', ['duplicate_finder.py', '/some/path', '-v']):
+            args = cli.parse_arguments()
+            assert args.verbose is True
+    
+    def test_parse_arguments_quiet_flag(self):
+        """Test parsing --quiet flag."""
+        with patch('sys.argv', ['duplicate_finder.py', '/some/path', '--quiet']):
+            args = cli.parse_arguments()
+            assert args.quiet is True
+        
+        with patch('sys.argv', ['duplicate_finder.py', '/some/path', '-q']):
+            args = cli.parse_arguments()
+            assert args.quiet is True
+    
+    def test_format_json_output(self, tmp_path, capsys):
+        """Test JSON output format."""
+        import json
+        
+        # Create test data
+        file1 = tmp_path / "file1.txt"
+        file2 = tmp_path / "file2.txt"
+        file3 = tmp_path / "unique.txt"
+        file1.write_text("duplicate content")
+        file2.write_text("duplicate content")
+        file3.write_text("unique content")
+        
+        # Create duplicate folders
+        folder1 = tmp_path / "folder1"
+        folder2 = tmp_path / "folder2"
+        folder1.mkdir()
+        folder2.mkdir()
+        (folder1 / "same.txt").write_text("same")
+        (folder2 / "same.txt").write_text("same")
+        
+        duplicates = {"hash1": [file1, file2]}
+        unique_files = [file3]
+        duplicate_folders = [[folder1, folder2]]
+        
+        # Call JSON formatter
+        formatter.format_json_output(duplicates, unique_files, duplicate_folders)
+        
+        # Capture and parse JSON output
+        captured = capsys.readouterr()
+        output = json.loads(captured.out)
+        
+        # Verify JSON structure
+        assert "duplicate_files" in output
+        assert "unique_files" in output
+        assert "duplicate_folders" in output
+        assert "statistics" in output
+        
+        # Verify duplicate files
+        assert len(output["duplicate_files"]) == 1
+        assert output["duplicate_files"][0]["count"] == 2
+        assert output["duplicate_files"][0]["hash"] == "hash1"
+        
+        # Verify unique files
+        assert len(output["unique_files"]) == 1
+        assert str(file3) in output["unique_files"][0]["path"]
+        
+        # Verify duplicate folders
+        assert len(output["duplicate_folders"]) == 1
+        assert output["duplicate_folders"][0]["count"] == 2
+        
+        # Verify statistics
+        stats = output["statistics"]
+        assert stats["duplicate_files_count"] == 2
+        assert stats["unique_files_count"] == 1
+        assert stats["duplicate_folder_groups_count"] == 1
+    
+    def test_format_json_output_empty_results(self, capsys):
+        """Test JSON output with no duplicates."""
+        import json
+        
+        formatter.format_json_output({}, [], [])
+        
+        captured = capsys.readouterr()
+        output = json.loads(captured.out)
+        
+        # Verify empty results
+        assert len(output["duplicate_files"]) == 0
+        assert len(output["unique_files"]) == 0
+        assert len(output["duplicate_folders"]) == 0
+        assert output["statistics"]["total_files"] == 0
+    
+    def test_quiet_mode_suppresses_output(self, tmp_path):
+        """Test that quiet mode suppresses non-error output."""
+        test_dir = tmp_path / "test"
+        test_dir.mkdir()
+        (test_dir / "file.txt").write_text("content")
+        
+        # Test scan_directory with quiet mode
+        files = scanner.scan_directory(test_dir, quiet=True)
+        assert len(files) == 1
+        
+        # Test find_duplicates with quiet mode
+        duplicates, unique_files, duplicate_folders = detector.find_duplicates(files, quiet=True)
+        assert len(unique_files) == 1
+    
+    def test_verbose_mode_enables_logging(self):
+        """Test that verbose mode enables detailed logging."""
+        import logging
+        
+        # Mock logging.basicConfig to check it's called with DEBUG level
+        with patch('logging.basicConfig') as mock_config:
+            with patch('sys.argv', ['duplicate_finder.py', '/tmp', '--verbose']):
+                with patch('pathlib.Path.exists', return_value=True):
+                    with patch('pathlib.Path.is_dir', return_value=True):
+                        with patch('duplicate_finder.scanner.scan_directory', return_value=[]):
+                            with patch('sys.exit'):
+                                cli.main()
+            
+            # Check logging was set to DEBUG
+            mock_config.assert_called()
+            call_kwargs = mock_config.call_args[1]
+            assert call_kwargs['level'] == logging.DEBUG
+    
+    def test_conflicting_verbose_quiet_flags(self):
+        """Test error when both verbose and quiet flags are used."""
+        with patch('sys.argv', ['duplicate_finder.py', '/tmp', '--verbose', '--quiet']):
+            with patch('sys.stderr'):
+                with pytest.raises(SystemExit):
+                    cli.main()
+    
+    def test_cli_json_output_mode(self, tmp_path, capsys):
+        """Test CLI correctly uses JSON formatter when --output json is specified."""
+        import json
+        
+        test_dir = tmp_path / "test"
+        test_dir.mkdir()
+        (test_dir / "file.txt").write_text("content")
+        
+        with patch('sys.argv', ['duplicate_finder.py', str(test_dir), '--output', 'json', '--quiet']):
+            cli.main()
+        
+        # Capture and verify JSON output was produced
+        captured = capsys.readouterr()
+        output = json.loads(captured.out)
+        
+        # Verify it's JSON format
+        assert "duplicate_files" in output
+        assert "unique_files" in output
+        assert "statistics" in output
+        assert len(output["unique_files"]) == 1

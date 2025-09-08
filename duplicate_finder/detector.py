@@ -12,7 +12,7 @@ from .hasher import calculate_file_hash, get_file_size
 from .folder_detector import find_duplicate_folders, get_files_in_duplicate_folders
 
 
-def find_duplicates(files: List[Path]) -> Tuple[Dict[str, List[Path]], List[Path], List[List[Path]]]:
+def find_duplicates(files: List[Path], verbose: bool = False, quiet: bool = False) -> Tuple[Dict[str, List[Path]], List[Path], List[List[Path]]]:
     """
     Find duplicate files and folders using multi-stage comparison.
     
@@ -23,6 +23,8 @@ def find_duplicates(files: List[Path]) -> Tuple[Dict[str, List[Path]], List[Path
     
     Args:
         files: List of file paths to check
+        verbose: Enable verbose output
+        quiet: Suppress non-error output
         
     Returns:
         Tuple of (duplicates_dict, unique_files, duplicate_folders)
@@ -30,11 +32,12 @@ def find_duplicates(files: List[Path]) -> Tuple[Dict[str, List[Path]], List[Path
         unique_files: list of files with no duplicates
         duplicate_folders: list of duplicate folder groups
     """
-    print("\n=== Stage 1: Grouping files by size ===")
+    if not quiet:
+        print("\n=== Stage 1: Grouping files by size ===")
     
     # Stage 1: Group files by size
     size_to_files = defaultdict(list)
-    for file_path in tqdm(files, desc="Analyzing sizes", unit=" files", leave=False):
+    for file_path in tqdm(files, desc="Analyzing sizes", unit=" files", leave=False, disable=quiet):
         size = get_file_size(file_path)
         if size >= 0:
             size_to_files[size].append(file_path)
@@ -43,21 +46,23 @@ def find_duplicates(files: List[Path]) -> Tuple[Dict[str, List[Path]], List[Path
     files_needing_hash = sum(len(group) for group in size_to_files.values() if len(group) > 1)
     unique_by_size = sum(1 for group in size_to_files.values() if len(group) == 1)
     
-    print(f"  Found {len(size_to_files)} unique file sizes")
-    print(f"  {unique_by_size} files are unique by size alone")
-    print(f"  {files_needing_hash} files need content comparison")
+    if not quiet:
+        print(f"  Found {len(size_to_files)} unique file sizes")
+        print(f"  {unique_by_size} files are unique by size alone")
+        print(f"  {files_needing_hash} files need content comparison")
     
     # Early exit if no potential duplicates
     if files_needing_hash == 0:
         unique_files = [f for group in size_to_files.values() for f in group]
         return {}, unique_files, []
     
-    print("\n=== Stage 2: Partial hash comparison ===")
+    if not quiet:
+        print("\n=== Stage 2: Partial hash comparison ===")
     
     # Stage 2: Partial hash for files with same size
     candidates_for_full_hash = []
     
-    for size, file_group in tqdm(size_to_files.items(), desc="Partial hashing", unit=" groups", leave=False):
+    for size, file_group in tqdm(size_to_files.items(), desc="Partial hashing", unit=" groups", leave=False, disable=quiet):
         if len(file_group) == 1:
             # Unique by size
             continue
@@ -76,9 +81,9 @@ def find_duplicates(files: List[Path]) -> Tuple[Dict[str, List[Path]], List[Path
             if len(partial_group) > 1:
                 candidates_for_full_hash.extend(partial_group)
     
-    print(f"  {len(candidates_for_full_hash)} files need full content comparison")
-    
-    print("\n=== Stage 3: Full hash comparison ===")
+    if not quiet:
+        print(f"  {len(candidates_for_full_hash)} files need full content comparison")
+        print("\n=== Stage 3: Full hash comparison ===")
     
     # Stage 3: Full hash only for files with matching partial hashes
     full_hash_to_files = defaultdict(list)
@@ -91,7 +96,7 @@ def find_duplicates(files: List[Path]) -> Tuple[Dict[str, List[Path]], List[Path
         if size >= 0 and partial:
             candidate_groups[f"{size}:{partial}"].append(file_path)
     
-    for group_key, group_files in tqdm(candidate_groups.items(), desc="Full hashing", unit=" groups", leave=True):
+    for group_key, group_files in tqdm(candidate_groups.items(), desc="Full hashing", unit=" groups", leave=True, disable=quiet):
         for file_path in group_files:
             full_hash = calculate_file_hash(file_path, partial=False)
             if full_hash:
@@ -121,9 +126,9 @@ def find_duplicates(files: List[Path]) -> Tuple[Dict[str, List[Path]], List[Path
         else:
             unique_files.extend(file_list)
     
-    print(f"  Optimization complete!")
-    
-    print("\n=== Stage 4: Smart folder duplicate detection ===")
+    if not quiet:
+        print(f"  Optimization complete!")
+        print("\n=== Stage 4: Smart folder duplicate detection ===")
     
     # Create a dictionary of file hashes for folder detection
     all_file_hashes = {}
@@ -144,7 +149,8 @@ def find_duplicates(files: List[Path]) -> Tuple[Dict[str, List[Path]], List[Path
     duplicate_folders = find_duplicate_folders(files, all_file_hashes)
     
     if duplicate_folders:
-        print(f"  Found {len(duplicate_folders)} groups of duplicate folders")
+        if not quiet:
+            print(f"  Found {len(duplicate_folders)} groups of duplicate folders")
         
         # Remove files that are in duplicate folders from individual file duplicates
         files_in_duplicate_folders = get_files_in_duplicate_folders(duplicate_folders, files)
@@ -164,6 +170,7 @@ def find_duplicates(files: List[Path]) -> Tuple[Dict[str, List[Path]], List[Path
         # Also remove folder-duplicate files from unique files list
         unique_files = [f for f in unique_files if f not in files_in_duplicate_folders]
     else:
-        print("  No duplicate folders found")
+        if not quiet:
+            print("  No duplicate folders found")
     
     return duplicates, unique_files, duplicate_folders
