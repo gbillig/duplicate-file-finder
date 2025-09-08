@@ -12,7 +12,7 @@ import os
 # Add parent directory to path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from duplicate_finder import cli, hasher, scanner, detector, formatter, folder_detector
+from duplicate_finder import cli, hasher, scanner, detector, formatter, folder_detector, parallel_hasher
 import pytest
 
 
@@ -1329,3 +1329,199 @@ class TestOutputFormats:
         assert "unique_files" in output
         assert "statistics" in output
         assert len(output["unique_files"]) == 1
+
+
+class TestParallelProcessing:
+    """Test parallel file hashing functionality."""
+    
+    def test_get_optimal_worker_count(self):
+        """Test that optimal worker count is reasonable."""
+        worker_count = parallel_hasher.get_optimal_worker_count()
+        
+        # Should be positive
+        assert worker_count > 0
+        # Should not be excessive
+        assert worker_count <= 16
+        # Should be related to CPU count
+        cpu_count = os.cpu_count() or 4
+        assert worker_count <= cpu_count * 2
+    
+    def test_parallel_hash_files(self, tmp_path):
+        """Test parallel hashing of multiple files."""
+        # Create test files
+        files = []
+        for i in range(10):
+            file_path = tmp_path / f"file_{i}.txt"
+            file_path.write_text(f"Content {i}")
+            files.append(file_path)
+        
+        # Hash files in parallel
+        results = parallel_hasher.parallel_hash_files(files, quiet=True)
+        
+        # Verify all files were hashed
+        assert len(results) == 10
+        for file_path in files:
+            assert file_path in results
+            assert results[file_path] is not None
+            assert len(results[file_path]) == 64  # SHA256 hex length
+    
+    def test_parallel_hash_files_partial(self, tmp_path):
+        """Test parallel partial hashing."""
+        # Create large test files
+        files = []
+        for i in range(5):
+            file_path = tmp_path / f"large_{i}.txt"
+            # Write more than 4KB
+            file_path.write_text("x" * 5000 + f" {i}")
+            files.append(file_path)
+        
+        # Hash files partially
+        results = parallel_hasher.parallel_hash_files(files, partial=True, quiet=True)
+        
+        # Verify all files were hashed
+        assert len(results) == 5
+        for file_path in files:
+            assert file_path in results
+            assert results[file_path] is not None
+    
+    def test_parallel_hash_identical_files(self, tmp_path):
+        """Test that identical files produce same hash in parallel."""
+        # Create identical files
+        files = []
+        content = "Identical content for all files"
+        for i in range(5):
+            file_path = tmp_path / f"identical_{i}.txt"
+            file_path.write_text(content)
+            files.append(file_path)
+        
+        # Hash in parallel
+        results = parallel_hasher.parallel_hash_files(files, quiet=True)
+        
+        # All hashes should be identical
+        hash_values = list(results.values())
+        assert all(h == hash_values[0] for h in hash_values)
+    
+    def test_parallel_hash_with_errors(self, tmp_path):
+        """Test parallel hashing handles errors gracefully."""
+        # Create some valid files
+        valid_file = tmp_path / "valid.txt"
+        valid_file.write_text("Valid content")
+        
+        # Include non-existent file
+        nonexistent = tmp_path / "nonexistent.txt"
+        
+        files = [valid_file, nonexistent]
+        
+        # Hash with errors
+        results = parallel_hasher.parallel_hash_files(files, quiet=True)
+        
+        # Valid file should be hashed
+        assert results[valid_file] is not None
+        # Nonexistent should return None
+        assert results[nonexistent] is None
+    
+    def test_parallel_hash_by_groups(self, tmp_path):
+        """Test parallel hashing with group structure."""
+        # Create files in groups
+        group1_files = []
+        group2_files = []
+        
+        for i in range(3):
+            file1 = tmp_path / f"group1_file{i}.txt"
+            file1.write_text(f"Group 1 content {i}")
+            group1_files.append(file1)
+            
+            file2 = tmp_path / f"group2_file{i}.txt"
+            file2.write_text(f"Group 2 content {i}")
+            group2_files.append(file2)
+        
+        file_groups = {
+            "group1": group1_files,
+            "group2": group2_files
+        }
+        
+        # Hash by groups
+        results = parallel_hasher.parallel_hash_by_groups(file_groups, quiet=True)
+        
+        # Verify structure
+        assert "group1" in results
+        assert "group2" in results
+        
+        # Each group should have hashes
+        assert len(results["group1"]) > 0
+        assert len(results["group2"]) > 0
+    
+    def test_parallel_size_and_hash(self, tmp_path):
+        """Test parallel size and partial hash calculation."""
+        # Create files of different sizes
+        small_file = tmp_path / "small.txt"
+        small_file.write_text("Small")
+        
+        medium_file = tmp_path / "medium.txt"
+        medium_file.write_text("Medium content here")
+        
+        large_file = tmp_path / "large.txt"
+        large_file.write_text("x" * 1000)
+        
+        files = [small_file, medium_file, large_file]
+        
+        # Get sizes and hashes
+        size_to_files, file_to_hash = parallel_hasher.parallel_size_and_hash(files, quiet=True)
+        
+        # Verify sizes are grouped correctly
+        assert len(size_to_files) == 3  # Three different sizes
+        
+        # Verify all files have hashes
+        assert len(file_to_hash) == 3
+        for file_path in files:
+            assert file_path in file_to_hash
+            assert file_to_hash[file_path] is not None
+    
+    def test_parallel_processing_performance(self, tmp_path):
+        """Test that parallel processing handles many files efficiently."""
+        import time
+        
+        # Create many small files
+        files = []
+        for i in range(50):
+            file_path = tmp_path / f"perf_test_{i}.txt"
+            file_path.write_text(f"Performance test content {i}")
+            files.append(file_path)
+        
+        # Time parallel hashing
+        start_time = time.time()
+        results = parallel_hasher.parallel_hash_files(files, quiet=True, max_workers=4)
+        parallel_time = time.time() - start_time
+        
+        # Verify all files were processed
+        assert len(results) == 50
+        
+        # Basic sanity check - should complete reasonably quickly
+        # (not comparing to sequential as that would make test slow)
+        assert parallel_time < 10  # Should finish within 10 seconds
+    
+    def test_detector_uses_parallel_hashing(self, tmp_path):
+        """Test that detector properly uses parallel hashing."""
+        # Create duplicate files
+        files = []
+        for i in range(3):
+            file1 = tmp_path / f"dup1_{i}.txt"
+            file1.write_text("Duplicate content")
+            files.append(file1)
+            
+            file2 = tmp_path / f"dup2_{i}.txt"
+            file2.write_text("Duplicate content")
+            files.append(file2)
+        
+        # Create unique file
+        unique = tmp_path / "unique.txt"
+        unique.write_text("Unique content")
+        files.append(unique)
+        
+        # Run detector with quiet mode
+        duplicates, unique_files, duplicate_folders = detector.find_duplicates(files, quiet=True)
+        
+        # Should find duplicates
+        assert len(duplicates) == 1
+        assert len(list(duplicates.values())[0]) == 6  # 6 duplicate files
+        assert len(unique_files) == 1

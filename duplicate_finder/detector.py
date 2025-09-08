@@ -8,8 +8,9 @@ from typing import Dict, List, Tuple
 
 from tqdm import tqdm
 
-from .hasher import calculate_file_hash, get_file_size
+from .hasher import get_file_size
 from .folder_detector import find_duplicate_folders, get_files_in_duplicate_folders
+from .parallel_hasher import parallel_hash_files, get_optimal_worker_count
 
 
 def find_duplicates(files: List[Path], verbose: bool = False, quiet: bool = False) -> Tuple[Dict[str, List[Path]], List[Path], List[List[Path]]]:
@@ -62,24 +63,35 @@ def find_duplicates(files: List[Path], verbose: bool = False, quiet: bool = Fals
     # Stage 2: Partial hash for files with same size
     candidates_for_full_hash = []
     
-    for size, file_group in tqdm(size_to_files.items(), desc="Partial hashing", unit=" groups", leave=False, disable=quiet):
-        if len(file_group) == 1:
-            # Unique by size
-            continue
-        
-        # Calculate partial hashes for this size group
-        size_partial_hashes = defaultdict(list)
-        for file_path in file_group:
-            partial_hash = calculate_file_hash(file_path, partial=True)
-            if partial_hash:
-                # Combine size and partial hash for unique key
-                key = f"{size}:{partial_hash}"
-                size_partial_hashes[key].append(file_path)
-        
-        # Check which need full hashing
-        for partial_key, partial_group in size_partial_hashes.items():
-            if len(partial_group) > 1:
-                candidates_for_full_hash.extend(partial_group)
+    # Collect all files that need partial hashing (groups with > 1 file)
+    files_to_partial_hash = []
+    for size, file_group in size_to_files.items():
+        if len(file_group) > 1:
+            files_to_partial_hash.extend(file_group)
+    
+    if verbose and not quiet:
+        print(f"  Using {get_optimal_worker_count()} parallel workers for hashing")
+    
+    # Parallel partial hashing
+    partial_hashes = parallel_hash_files(
+        files_to_partial_hash,
+        partial=True,
+        desc="Partial hashing",
+        quiet=quiet
+    )
+    
+    # Group files by size and partial hash
+    size_partial_groups = defaultdict(list)
+    for file_path, partial_hash in partial_hashes.items():
+        if partial_hash:
+            size = get_file_size(file_path)
+            key = f"{size}:{partial_hash}"
+            size_partial_groups[key].append(file_path)
+    
+    # Find candidates for full hashing
+    for group_key, group_files in size_partial_groups.items():
+        if len(group_files) > 1:
+            candidates_for_full_hash.extend(group_files)
     
     if not quiet:
         print(f"  {len(candidates_for_full_hash)} files need full content comparison")
@@ -88,17 +100,17 @@ def find_duplicates(files: List[Path], verbose: bool = False, quiet: bool = Fals
     # Stage 3: Full hash only for files with matching partial hashes
     full_hash_to_files = defaultdict(list)
     
-    # Group candidates by size and partial hash for efficient full hashing
-    candidate_groups = defaultdict(list)
-    for file_path in candidates_for_full_hash:
-        size = get_file_size(file_path)
-        partial = calculate_file_hash(file_path, partial=True)
-        if size >= 0 and partial:
-            candidate_groups[f"{size}:{partial}"].append(file_path)
-    
-    for group_key, group_files in tqdm(candidate_groups.items(), desc="Full hashing", unit=" groups", leave=True, disable=quiet):
-        for file_path in group_files:
-            full_hash = calculate_file_hash(file_path, partial=False)
+    # Parallel full hashing
+    if candidates_for_full_hash:
+        full_hashes = parallel_hash_files(
+            candidates_for_full_hash,
+            partial=False,
+            desc="Full hashing",
+            quiet=quiet
+        )
+        
+        # Group by full hash
+        for file_path, full_hash in full_hashes.items():
             if full_hash:
                 full_hash_to_files[full_hash].append(file_path)
     
@@ -137,13 +149,22 @@ def find_duplicates(files: List[Path], verbose: bool = False, quiet: bool = Fals
             all_file_hashes[file_path] = hash_val
     
     # Add files that were unique by size or partial hash
+    # Collect files that need hashing for folder detection
+    files_needing_folder_hash = []
     for size, file_group in size_to_files.items():
         for file_path in file_group:
             if file_path not in all_file_hashes:
-                # For unique files, we still need their hash for folder comparison
-                full_hash = calculate_file_hash(file_path, partial=False)
-                if full_hash:
-                    all_file_hashes[file_path] = full_hash
+                files_needing_folder_hash.append(file_path)
+    
+    # Parallel hash remaining files for folder detection
+    if files_needing_folder_hash:
+        remaining_hashes = parallel_hash_files(
+            files_needing_folder_hash,
+            partial=False,
+            desc="Hashing for folder detection",
+            quiet=quiet
+        )
+        all_file_hashes.update(remaining_hashes)
     
     # Find duplicate folders
     duplicate_folders = find_duplicate_folders(files, all_file_hashes)
