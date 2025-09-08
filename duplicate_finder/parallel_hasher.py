@@ -4,6 +4,7 @@ Parallel file hashing utilities for improved I/O performance.
 
 import os
 import sys
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Dict, List, Tuple, Optional
@@ -12,22 +13,27 @@ from collections import defaultdict
 from tqdm import tqdm
 
 from .hasher import calculate_file_hash, get_file_size
+from .adaptive_optimizer import AdaptiveWorkerPool, get_adaptive_config
 
 
-def get_optimal_worker_count() -> int:
+def get_optimal_worker_count(path: Optional[Path] = None, adaptive: bool = False) -> int:
     """
     Determine optimal number of worker threads based on system capabilities.
+    
+    Args:
+        path: Optional path for disk type detection
+        adaptive: Use adaptive optimization
     
     Returns:
         Number of worker threads to use
     """
-    # Get CPU count
+    if adaptive:
+        config = get_adaptive_config(path)
+        return config['io_workers']
+    
+    # Legacy simple calculation
     cpu_count = os.cpu_count() or 4
-    
-    # For I/O bound tasks like file hashing, we can use more threads than CPUs
-    # But not too many to avoid overwhelming the system
     optimal_workers = min(cpu_count * 2, 16)
-    
     return optimal_workers
 
 
@@ -206,3 +212,85 @@ def parallel_size_and_hash(
                     pbar.update(1)
     
     return dict(size_to_files), file_to_hash
+
+
+def parallel_hash_files_adaptive(
+    files: List[Path],
+    partial: bool = False,
+    desc: str = "Hashing files",
+    quiet: bool = False,
+    path: Optional[Path] = None
+) -> Dict[Path, Optional[str]]:
+    """
+    Hash multiple files in parallel using adaptive optimization.
+    
+    This version automatically adjusts worker counts based on system
+    resources and workload characteristics.
+    
+    Args:
+        files: List of file paths to hash
+        partial: If True, only hash first 4KB
+        desc: Description for progress bar
+        quiet: Suppress progress output
+        path: Path for disk type detection
+        
+    Returns:
+        Dictionary mapping file paths to their hashes
+    """
+    if not files:
+        return {}
+    
+    # Get the path from first file if not provided
+    if path is None and files:
+        path = files[0].parent
+    
+    # Create adaptive worker pool
+    pool = AdaptiveWorkerPool(path)
+    
+    # Get optimal worker count for this workload
+    workers = pool.get_io_workers(len(files)) if partial else pool.get_cpu_workers(len(files))
+    
+    if not quiet:
+        print(f"  Using {workers} adaptive workers for {desc}")
+        if len(files) > 1000:
+            print(f"  System: {pool.profile.disk_type.upper()}, {pool.profile.cpu_count} CPUs, {pool.profile.memory_gb:.1f}GB RAM")
+    
+    results = {}
+    
+    # Use ThreadPoolExecutor with adaptive worker count
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        # Submit all hashing tasks
+        future_to_file = {}
+        for file_path in files:
+            future = executor.submit(calculate_file_hash, file_path, partial)
+            future_to_file[future] = (file_path, time.time())
+        
+        # Process results with performance tracking
+        with tqdm(
+            total=len(files),
+            desc=desc,
+            unit=" files",
+            disable=quiet,
+            leave=False
+        ) as pbar:
+            for future in as_completed(future_to_file):
+                file_path, start_time = future_to_file[future]
+                elapsed = time.time() - start_time
+                
+                try:
+                    hash_value = future.result()
+                    results[file_path] = hash_value
+                    
+                    # Record performance for adaptive adjustment
+                    if partial:
+                        pool.record_io_time(elapsed)
+                    else:
+                        pool.record_cpu_time(elapsed)
+                        
+                except Exception as e:
+                    print(f"Error hashing {file_path}: {e}", file=sys.stderr)
+                    results[file_path] = None
+                finally:
+                    pbar.update(1)
+    
+    return results

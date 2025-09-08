@@ -10,10 +10,11 @@ from tqdm import tqdm
 
 from .hasher import get_file_size
 from .folder_detector import find_duplicate_folders, get_files_in_duplicate_folders
-from .parallel_hasher import parallel_hash_files, get_optimal_worker_count
+from .parallel_hasher import parallel_hash_files, get_optimal_worker_count, parallel_hash_files_adaptive
+from .adaptive_optimizer import get_adaptive_config
 
 
-def find_duplicates(files: List[Path], verbose: bool = False, quiet: bool = False) -> Tuple[Dict[str, List[Path]], List[Path], List[List[Path]]]:
+def find_duplicates(files: List[Path], verbose: bool = False, quiet: bool = False, adaptive: bool = False, manual_workers: int = None) -> Tuple[Dict[str, List[Path]], List[Path], List[List[Path]]]:
     """
     Find duplicate files and folders using multi-stage comparison.
     
@@ -26,6 +27,8 @@ def find_duplicates(files: List[Path], verbose: bool = False, quiet: bool = Fals
         files: List of file paths to check
         verbose: Enable verbose output
         quiet: Suppress non-error output
+        adaptive: Use adaptive optimization
+        manual_workers: Manual override for worker count
         
     Returns:
         Tuple of (duplicates_dict, unique_files, duplicate_folders)
@@ -70,15 +73,29 @@ def find_duplicates(files: List[Path], verbose: bool = False, quiet: bool = Fals
             files_to_partial_hash.extend(file_group)
     
     if verbose and not quiet:
-        print(f"  Using {get_optimal_worker_count()} parallel workers for hashing")
+        if adaptive:
+            config = get_adaptive_config(files[0].parent if files else None, len(files), manual_workers)
+            print(f"  Using adaptive optimization: {config['io_workers']} I/O workers")
+        else:
+            print(f"  Using {get_optimal_worker_count()} parallel workers for hashing")
     
     # Parallel partial hashing
-    partial_hashes = parallel_hash_files(
-        files_to_partial_hash,
-        partial=True,
-        desc="Partial hashing",
-        quiet=quiet
-    )
+    if adaptive:
+        partial_hashes = parallel_hash_files_adaptive(
+            files_to_partial_hash,
+            partial=True,
+            desc="Partial hashing",
+            quiet=quiet,
+            path=files[0].parent if files else None
+        )
+    else:
+        partial_hashes = parallel_hash_files(
+            files_to_partial_hash,
+            partial=True,
+            desc="Partial hashing",
+            quiet=quiet,
+            max_workers=manual_workers
+        )
     
     # Group files by size and partial hash
     size_partial_groups = defaultdict(list)
@@ -102,12 +119,22 @@ def find_duplicates(files: List[Path], verbose: bool = False, quiet: bool = Fals
     
     # Parallel full hashing
     if candidates_for_full_hash:
-        full_hashes = parallel_hash_files(
-            candidates_for_full_hash,
-            partial=False,
-            desc="Full hashing",
-            quiet=quiet
-        )
+        if adaptive:
+            full_hashes = parallel_hash_files_adaptive(
+                candidates_for_full_hash,
+                partial=False,
+                desc="Full hashing",
+                quiet=quiet,
+                path=files[0].parent if files else None
+            )
+        else:
+            full_hashes = parallel_hash_files(
+                candidates_for_full_hash,
+                partial=False,
+                desc="Full hashing",
+                quiet=quiet,
+                max_workers=manual_workers
+            )
         
         # Group by full hash
         for file_path, full_hash in full_hashes.items():
@@ -158,12 +185,22 @@ def find_duplicates(files: List[Path], verbose: bool = False, quiet: bool = Fals
     
     # Parallel hash remaining files for folder detection
     if files_needing_folder_hash:
-        remaining_hashes = parallel_hash_files(
-            files_needing_folder_hash,
-            partial=False,
-            desc="Hashing for folder detection",
-            quiet=quiet
-        )
+        if adaptive:
+            remaining_hashes = parallel_hash_files_adaptive(
+                files_needing_folder_hash,
+                partial=False,
+                desc="Hashing for folder detection",
+                quiet=quiet,
+                path=files[0].parent if files else None
+            )
+        else:
+            remaining_hashes = parallel_hash_files(
+                files_needing_folder_hash,
+                partial=False,
+                desc="Hashing for folder detection",
+                quiet=quiet,
+                max_workers=manual_workers
+            )
         all_file_hashes.update(remaining_hashes)
     
     # Find duplicate folders

@@ -12,7 +12,7 @@ import os
 # Add parent directory to path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from duplicate_finder import cli, hasher, scanner, detector, formatter, folder_detector, parallel_hasher, memory_efficient_detector
+from duplicate_finder import cli, hasher, scanner, detector, formatter, folder_detector, parallel_hasher, memory_efficient_detector, adaptive_optimizer
 import pytest
 
 
@@ -1695,3 +1695,166 @@ class TestMemoryEfficientProcessing:
         for dup_list in duplicates.values():
             assert len(dup_list) == 10
         assert len(unique_files) == 0
+
+
+class TestAdaptiveOptimization:
+    """Test adaptive worker optimization functionality."""
+    
+    def test_system_profile(self):
+        """Test system profiling."""
+        profile = adaptive_optimizer.profile_system()
+        
+        # Should have valid values
+        assert profile.cpu_count > 0
+        assert profile.memory_gb > 0
+        assert profile.disk_type in ['ssd', 'hdd']
+        assert profile.os_type in ['Linux', 'Windows', 'Darwin']
+        assert profile.io_threads > 0
+        assert profile.cpu_threads > 0
+    
+    def test_detect_disk_type(self, tmp_path):
+        """Test disk type detection."""
+        disk_type = adaptive_optimizer.detect_disk_type(tmp_path)
+        
+        # Should return valid disk type
+        assert disk_type in ['ssd', 'hdd']
+    
+    def test_adaptive_worker_pool(self, tmp_path):
+        """Test adaptive worker pool functionality."""
+        pool = adaptive_optimizer.AdaptiveWorkerPool(tmp_path)
+        
+        # Test worker calculations
+        io_workers = pool.get_io_workers(100)
+        assert io_workers > 0
+        assert io_workers <= pool.profile.io_threads
+        
+        cpu_workers = pool.get_cpu_workers(50)
+        assert cpu_workers > 0
+        assert cpu_workers <= pool.profile.cpu_threads
+        
+        # Test batch size calculation
+        batch_size = pool.get_batch_size(10000)
+        assert batch_size > 0
+        assert batch_size <= 10000
+    
+    def test_adaptive_worker_adjustment(self, tmp_path):
+        """Test adaptive worker adjustment based on performance."""
+        pool = adaptive_optimizer.AdaptiveWorkerPool(tmp_path)
+        initial_io_workers = pool.io_workers
+        
+        # Record fast I/O times
+        for _ in range(60):
+            pool.record_io_time(0.05)  # Fast operations
+        
+        # Workers might increase for fast operations
+        assert pool.io_workers >= initial_io_workers
+        
+        # Record slow I/O times
+        for _ in range(60):
+            pool.record_io_time(2.0)  # Slow operations
+        
+        # Workers might decrease for slow operations
+        # (actual behavior depends on adjustment logic)
+        assert pool.io_workers > 0
+    
+    def test_get_adaptive_config(self, tmp_path):
+        """Test adaptive configuration generation."""
+        config = adaptive_optimizer.get_adaptive_config(tmp_path, file_count=1000)
+        
+        # Should have required keys
+        assert 'io_workers' in config
+        assert 'cpu_workers' in config
+        assert 'batch_size' in config
+        
+        # Values should be reasonable
+        assert config['io_workers'] > 0
+        assert config['cpu_workers'] > 0
+        assert config['batch_size'] > 0
+        
+        # Test manual override
+        manual_config = adaptive_optimizer.get_adaptive_config(
+            tmp_path, file_count=1000, manual_workers=4
+        )
+        assert manual_config['io_workers'] == 4
+        assert manual_config['cpu_workers'] == 4
+    
+    def test_parallel_hash_files_adaptive(self, tmp_path):
+        """Test adaptive parallel hashing."""
+        # Create test files
+        files = []
+        for i in range(10):
+            file_path = tmp_path / f"adaptive_test_{i}.txt"
+            file_path.write_text(f"Content {i}")
+            files.append(file_path)
+        
+        # Hash with adaptive optimization
+        results = parallel_hasher.parallel_hash_files_adaptive(
+            files, partial=False, quiet=True, path=tmp_path
+        )
+        
+        # Should hash all files
+        assert len(results) == 10
+        for file_path in files:
+            assert file_path in results
+            assert results[file_path] is not None
+    
+    def test_detector_adaptive_mode(self, tmp_path):
+        """Test detector with adaptive optimization."""
+        # Create test files
+        files = []
+        for i in range(4):
+            dup_file = tmp_path / f"adaptive_dup_{i}.txt"
+            dup_file.write_text("duplicate")
+            files.append(dup_file)
+        
+        unique_file = tmp_path / "adaptive_unique.txt"
+        unique_file.write_text("unique")
+        files.append(unique_file)
+        
+        # Run with adaptive mode
+        duplicates, unique_files, duplicate_folders = detector.find_duplicates(
+            files, quiet=True, adaptive=True
+        )
+        
+        # Should find duplicates
+        assert len(duplicates) == 1
+        assert len(list(duplicates.values())[0]) == 4
+        assert len(unique_files) == 1
+    
+    def test_cli_adaptive_flags(self):
+        """Test CLI adaptive optimization flags."""
+        with patch('sys.argv', ['duplicate_finder.py', '/path', '--adaptive']):
+            args = cli.parse_arguments()
+            assert args.adaptive is True
+            assert args.workers is None
+        
+        with patch('sys.argv', ['duplicate_finder.py', '/path', '--workers', '8']):
+            args = cli.parse_arguments()
+            assert args.adaptive is False
+            assert args.workers == 8
+        
+        with patch('sys.argv', ['duplicate_finder.py', '/path', '--adaptive', '--workers', '6']):
+            args = cli.parse_arguments()
+            assert args.adaptive is True
+            assert args.workers == 6
+    
+    def test_get_memory_gb(self):
+        """Test memory detection."""
+        memory_gb = adaptive_optimizer.get_memory_gb()
+        
+        # Should return reasonable value
+        assert memory_gb > 0
+        assert memory_gb < 10000  # Less than 10TB seems reasonable
+    
+    def test_profile_summary(self, tmp_path):
+        """Test system profile summary generation."""
+        pool = adaptive_optimizer.AdaptiveWorkerPool(tmp_path)
+        summary = pool.get_profile_summary()
+        
+        # Should contain key information
+        assert "CPU cores" in summary
+        assert "Memory" in summary
+        assert "Disk type" in summary
+        assert "OS" in summary
+        assert "I/O workers" in summary
+        assert "CPU workers" in summary

@@ -1,5 +1,6 @@
 tqdm>=4.65.0       # Progress bars
 colorama>=0.4.6    # Cross-platform colored output
+psutil>=5.9.0      # System resource monitoring
 pytest>=7.4.0      # Testing framework
 black>=23.0.0      # Code formatter
 flake8>=6.0.0      # Linter

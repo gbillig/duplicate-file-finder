@@ -54,6 +54,16 @@ def parse_arguments() -> argparse.Namespace:
         default=1000,
         help="Batch size for memory-efficient mode (default: 1000)",
     )
+    parser.add_argument(
+        "--adaptive",
+        action="store_true",
+        help="Use adaptive optimization based on system resources",
+    )
+    parser.add_argument(
+        "--workers",
+        type=int,
+        help="Manual override for worker count",
+    )
     return parser.parse_args()
 
 
@@ -108,7 +118,11 @@ def main():
         )
     else:
         duplicates, unique_files, duplicate_folders = find_duplicates(
-            files, verbose=args.verbose, quiet=args.quiet
+            files, 
+            verbose=args.verbose, 
+            quiet=args.quiet,
+            adaptive=args.adaptive,
+            manual_workers=args.workers
         )
     
     # Output results based on format
