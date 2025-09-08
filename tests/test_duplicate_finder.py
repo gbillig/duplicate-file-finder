@@ -12,7 +12,7 @@ import os
 # Add parent directory to path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from duplicate_finder import cli, hasher, scanner, detector, formatter, folder_detector, parallel_hasher
+from duplicate_finder import cli, hasher, scanner, detector, formatter, folder_detector, parallel_hasher, memory_efficient_detector
 import pytest
 
 
@@ -1525,3 +1525,173 @@ class TestParallelProcessing:
         assert len(duplicates) == 1
         assert len(list(duplicates.values())[0]) == 6  # 6 duplicate files
         assert len(unique_files) == 1
+
+
+class TestMemoryEfficientProcessing:
+    """Test memory-efficient duplicate detection."""
+    
+    def test_partial_hash_cache(self):
+        """Test partial hash cache functionality."""
+        cache = memory_efficient_detector.PartialHashCache(max_size=5)
+        
+        # Test basic operations
+        test_path = Path("/test/file.txt")
+        assert cache.get(test_path) is None
+        
+        cache.put(test_path, "hash123")
+        assert cache.get(test_path) == "hash123"
+        
+        # Test stats
+        stats = cache.get_stats()
+        assert stats['hits'] == 1
+        assert stats['misses'] == 1
+        assert stats['size'] == 1
+    
+    def test_cache_eviction(self):
+        """Test cache eviction when max size is reached."""
+        cache = memory_efficient_detector.PartialHashCache(max_size=3)
+        
+        # Fill cache
+        for i in range(5):
+            cache.put(Path(f"/test/file{i}.txt"), f"hash{i}")
+        
+        # Cache should have evicted some entries
+        assert len(cache.cache) <= 3
+    
+    def test_batch_files_by_size(self):
+        """Test file batching generator."""
+        files = [Path(f"/test/file{i}.txt") for i in range(10)]
+        
+        batches = list(memory_efficient_detector.batch_files_by_size(files, batch_size=3))
+        
+        assert len(batches) == 4  # 10 files / 3 per batch = 4 batches
+        assert len(batches[0]) == 3
+        assert len(batches[-1]) == 1  # Last batch has remainder
+    
+    def test_process_size_groups_streaming(self, tmp_path):
+        """Test streaming size group processing."""
+        # Create test files of different sizes
+        files = []
+        for i in range(5):
+            file_path = tmp_path / f"same_size_{i}.txt"
+            file_path.write_text("same")
+            files.append(file_path)
+        
+        unique_file = tmp_path / "unique.txt"
+        unique_file.write_text("different content here")
+        files.append(unique_file)
+        
+        # Process with small batch size
+        size_groups, unique_files = memory_efficient_detector.process_size_groups_streaming(
+            files, batch_size=2, quiet=True
+        )
+        
+        # Should have one group with duplicates and one unique
+        assert len(size_groups) == 1
+        assert len(unique_files) == 1
+        assert len(list(size_groups.values())[0]) == 5
+    
+    def test_find_duplicates_memory_efficient(self, tmp_path):
+        """Test memory-efficient duplicate detection."""
+        # Create duplicate files
+        files = []
+        for i in range(4):
+            dup_file = tmp_path / f"duplicate_{i}.txt"
+            dup_file.write_text("duplicate content")
+            files.append(dup_file)
+        
+        # Create unique files
+        for i in range(3):
+            unique_file = tmp_path / f"unique_{i}.txt"
+            unique_file.write_text(f"unique content {i}")
+            files.append(unique_file)
+        
+        # Run memory-efficient detection with small batch size
+        duplicates, unique_files, duplicate_folders = memory_efficient_detector.find_duplicates_memory_efficient(
+            files, batch_size=3, cache_size=10, quiet=True
+        )
+        
+        # Should find duplicates
+        assert len(duplicates) == 1
+        assert len(list(duplicates.values())[0]) == 4
+        assert len(unique_files) == 3
+    
+    def test_memory_efficient_with_folders(self, tmp_path):
+        """Test memory-efficient mode with folder duplicates."""
+        # Create duplicate folders
+        folder1 = tmp_path / "folder1"
+        folder2 = tmp_path / "folder2"
+        folder1.mkdir()
+        folder2.mkdir()
+        
+        files = []
+        for folder in [folder1, folder2]:
+            file1 = folder / "file1.txt"
+            file1.write_text("content1")
+            files.append(file1)
+            
+            file2 = folder / "file2.txt"
+            file2.write_text("content2")
+            files.append(file2)
+        
+        # Run memory-efficient detection
+        duplicates, unique_files, duplicate_folders = memory_efficient_detector.find_duplicates_memory_efficient(
+            files, batch_size=2, quiet=True
+        )
+        
+        # Should detect folder duplicates
+        assert len(duplicate_folders) == 1
+        assert len(duplicate_folders[0]) == 2
+        # Individual files should be filtered out
+        assert len(duplicates) == 0
+    
+    def test_memory_efficient_cache_usage(self, tmp_path):
+        """Test that cache improves performance."""
+        # Create files that will be processed multiple times
+        files = []
+        for i in range(10):
+            file_path = tmp_path / f"file_{i}.txt"
+            file_path.write_text(f"content {i % 3}")  # Some duplicates
+            files.append(file_path)
+        
+        # Run with cache
+        duplicates, unique_files, duplicate_folders = memory_efficient_detector.find_duplicates_memory_efficient(
+            files, batch_size=3, cache_size=20, verbose=True, quiet=True
+        )
+        
+        # Should find some duplicates
+        assert len(duplicates) > 0
+    
+    def test_cli_memory_efficient_flag(self):
+        """Test CLI memory-efficient flag parsing."""
+        with patch('sys.argv', ['duplicate_finder.py', '/path', '--memory-efficient']):
+            args = cli.parse_arguments()
+            assert args.memory_efficient is True
+            assert args.batch_size == 1000  # Default
+        
+        with patch('sys.argv', ['duplicate_finder.py', '/path', '--memory-efficient', '--batch-size', '500']):
+            args = cli.parse_arguments()
+            assert args.memory_efficient is True
+            assert args.batch_size == 500
+    
+    def test_memory_efficient_large_dataset(self, tmp_path):
+        """Test memory-efficient mode with many files."""
+        # Create many files to test batching
+        files = []
+        for i in range(100):
+            file_path = tmp_path / f"file_{i}.txt"
+            # Create pattern of duplicates
+            content = f"content_{i % 10}"
+            file_path.write_text(content)
+            files.append(file_path)
+        
+        # Run with small batch size to test batching
+        duplicates, unique_files, duplicate_folders = memory_efficient_detector.find_duplicates_memory_efficient(
+            files, batch_size=10, cache_size=50, quiet=True
+        )
+        
+        # Should find 10 groups of 10 duplicates each
+        assert len(duplicates) == 10
+        for dup_list in duplicates.values():
+            assert len(dup_list) == 10
+        assert len(unique_files) == 0

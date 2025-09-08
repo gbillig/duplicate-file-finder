@@ -10,6 +10,7 @@ from pathlib import Path
 
 from .scanner import scan_directory
 from .detector import find_duplicates
+from .memory_efficient_detector import find_duplicates_memory_efficient
 from .formatter import format_output, format_json_output
 from .hasher import get_warning_summary
 
@@ -41,6 +42,17 @@ def parse_arguments() -> argparse.Namespace:
         "-q", "--quiet",
         action="store_true",
         help="Suppress non-error output",
+    )
+    parser.add_argument(
+        "--memory-efficient",
+        action="store_true",
+        help="Use memory-efficient mode for very large directories",
+    )
+    parser.add_argument(
+        "--batch-size",
+        type=int,
+        default=1000,
+        help="Batch size for memory-efficient mode (default: 1000)",
     )
     return parser.parse_args()
 
@@ -85,9 +97,19 @@ def main():
         print(f"\nFound {len(files)} files.")
     
     # Find duplicates
-    duplicates, unique_files, duplicate_folders = find_duplicates(
-        files, verbose=args.verbose, quiet=args.quiet
-    )
+    if args.memory_efficient:
+        if not args.quiet:
+            print(f"Using memory-efficient mode with batch size {args.batch_size}")
+        duplicates, unique_files, duplicate_folders = find_duplicates_memory_efficient(
+            files, 
+            batch_size=args.batch_size,
+            verbose=args.verbose, 
+            quiet=args.quiet
+        )
+    else:
+        duplicates, unique_files, duplicate_folders = find_duplicates(
+            files, verbose=args.verbose, quiet=args.quiet
+        )
     
     # Output results based on format
     if args.output == "json":
