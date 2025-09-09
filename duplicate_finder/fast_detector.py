@@ -8,6 +8,24 @@ from typing import Dict, List, Tuple, Optional, Set
 from dataclasses import dataclass
 from collections import defaultdict
 import time
+from enum import Enum
+
+
+class FileCategory(Enum):
+    """File categories for specialized duplicate detection."""
+    PHOTO = "photo"
+    VIDEO = "video"
+    DOCUMENT = "document"
+    OTHER = "other"
+
+
+# File extensions for each category
+PHOTO_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.gif', '.bmp', '.tiff', '.tif', 
+                   '.raw', '.cr2', '.nef', '.arw', '.dng', '.heic', '.heif', '.webp'}
+VIDEO_EXTENSIONS = {'.mp4', '.avi', '.mov', '.mkv', '.wmv', '.flv', '.webm',
+                   '.m4v', '.mpg', '.mpeg', '.3gp', '.vob', '.ts', '.m2ts'}
+DOCUMENT_EXTENSIONS = {'.pdf', '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx',
+                      '.txt', '.rtf', '.odt', '.ods', '.odp', '.csv'}
 
 
 @dataclass
@@ -18,13 +36,37 @@ class FileMetadata:
     mtime: float
     name: str
     name_lower: str
+    category: FileCategory = FileCategory.OTHER
 
 
 @dataclass
 class DuplicateGroup:
     """A group of files that are potential duplicates."""
     files: List[FileMetadata]
-    match_type: str  # 'exact' or 'size_only'
+    match_type: str  # 'exact', 'category_match', 'name_only'
+    category: FileCategory = FileCategory.OTHER
+
+
+def categorize_file(file_path: Path) -> FileCategory:
+    """
+    Categorize a file based on its extension.
+    
+    Args:
+        file_path: Path to the file
+        
+    Returns:
+        FileCategory enum value
+    """
+    extension = file_path.suffix.lower()
+    
+    if extension in PHOTO_EXTENSIONS:
+        return FileCategory.PHOTO
+    elif extension in VIDEO_EXTENSIONS:
+        return FileCategory.VIDEO
+    elif extension in DOCUMENT_EXTENSIONS:
+        return FileCategory.DOCUMENT
+    else:
+        return FileCategory.OTHER
 
 
 def scan_files_metadata(directory: Path, verbose: bool = False) -> List[FileMetadata]:
@@ -56,12 +98,16 @@ def scan_files_metadata(directory: Path, verbose: bool = False) -> List[FileMeta
                     # Get file stats in one call
                     stat_result = file_path.stat()
                     
+                    # Categorize the file
+                    category = categorize_file(file_path)
+                    
                     files.append(FileMetadata(
                         path=file_path,
                         size=stat_result.st_size,
                         mtime=stat_result.st_mtime,
                         name=filename,
-                        name_lower=filename.lower()
+                        name_lower=filename.lower(),
+                        category=category
                     ))
                     
                     file_count += 1
@@ -87,16 +133,41 @@ def scan_files_metadata(directory: Path, verbose: bool = False) -> List[FileMeta
     return files
 
 
+def are_duplicates_by_category(file1: FileMetadata, file2: FileMetadata) -> bool:
+    """
+    Check if two files are duplicates based on simple rules.
+    
+    For exact duplicates (which is what we want):
+    - Same filename (case-insensitive)
+    - Same file size
+    
+    That's it! If these match, it's almost certainly a byte-for-byte copy.
+    We don't need to check dates or content.
+    
+    Args:
+        file1: First file metadata
+        file2: Second file metadata
+        
+    Returns:
+        True if files are considered duplicates
+    """
+    # Simple and fast: same name + same size = duplicate
+    return (file1.name_lower == file2.name_lower and 
+            file1.size == file2.size)
+
+
 def find_metadata_duplicates(
     files: List[FileMetadata], 
-    verbose: bool = False
+    verbose: bool = False,
+    use_categories: bool = True
 ) -> Tuple[List[DuplicateGroup], List[FileMetadata]]:
     """
-    Find duplicate files based on metadata (filename + size + mtime).
+    Find duplicate files based on metadata with category-specific rules.
     
     Args:
         files: List of file metadata
         verbose: Enable verbose output
+        use_categories: Use category-specific duplicate detection
         
     Returns:
         Tuple of (duplicate_groups, unique_files)
@@ -105,6 +176,14 @@ def find_metadata_duplicates(
     
     if verbose:
         print(f"Analyzing {len(files)} files for duplicates...")
+        if use_categories:
+            # Count files by category
+            category_counts = defaultdict(int)
+            for f in files:
+                category_counts[f.category] += 1
+            print("File categories:")
+            for cat, count in category_counts.items():
+                print(f"  {cat.value}: {count} files")
     
     # Group by filename (case-insensitive)
     name_groups = defaultdict(list)
@@ -119,25 +198,52 @@ def find_metadata_duplicates(
             # Unique filename
             unique_files.extend(file_list)
             continue
+        
+        if use_categories:
+            # Category-specific duplicate detection
+            processed = set()
             
-        # Multiple files with same name - check size and time
-        size_time_groups = defaultdict(list)
-        
-        for file_meta in file_list:
-            # Create key from size and rounded mtime (to handle slight time differences)
-            key = (file_meta.size, round(file_meta.mtime))
-            size_time_groups[key].append(file_meta)
-        
-        for key, matching_files in size_time_groups.items():
-            if len(matching_files) > 1:
-                # Found duplicates
-                duplicate_groups.append(DuplicateGroup(
-                    files=matching_files,
-                    match_type='exact'
-                ))
-            else:
-                # Files with same name but different size/time
-                unique_files.extend(matching_files)
+            for i, file1 in enumerate(file_list):
+                if i in processed:
+                    continue
+                    
+                duplicates = [file1]
+                processed.add(i)
+                
+                for j, file2 in enumerate(file_list[i+1:], i+1):
+                    if j in processed:
+                        continue
+                    
+                    if are_duplicates_by_category(file1, file2):
+                        duplicates.append(file2)
+                        processed.add(j)
+                
+                if len(duplicates) > 1:
+                    duplicate_groups.append(DuplicateGroup(
+                        files=duplicates,
+                        match_type='category_match',
+                        category=duplicates[0].category
+                    ))
+                else:
+                    unique_files.append(file1)
+        else:
+            # Original exact matching logic
+            size_time_groups = defaultdict(list)
+            
+            for file_meta in file_list:
+                # Create key from size and rounded mtime
+                key = (file_meta.size, round(file_meta.mtime))
+                size_time_groups[key].append(file_meta)
+            
+            for key, matching_files in size_time_groups.items():
+                if len(matching_files) > 1:
+                    duplicate_groups.append(DuplicateGroup(
+                        files=matching_files,
+                        match_type='exact',
+                        category=matching_files[0].category
+                    ))
+                else:
+                    unique_files.extend(matching_files)
     
     elapsed = time.time() - start_time
     if verbose:
@@ -175,19 +281,34 @@ def format_duplicate_report(
         lines.append("📄 DUPLICATE FILES")
         lines.append("-" * 30)
         
-        for i, group in enumerate(duplicate_groups, 1):
-            lines.append(f"\n📁 GROUP {i} ({len(group.files)} files):")
-            
-            for file_meta in group.files:
-                size_mb = file_meta.size / (1024 * 1024)
-                mtime_str = time.strftime('%Y-%m-%d %H:%M:%S', 
-                                         time.localtime(file_meta.mtime))
+        # Group duplicates by category for better organization
+        groups_by_category = defaultdict(list)
+        for group in duplicate_groups:
+            groups_by_category[group.category].append(group)
+        
+        group_num = 1
+        for category in [FileCategory.PHOTO, FileCategory.VIDEO, FileCategory.DOCUMENT, FileCategory.OTHER]:
+            if category not in groups_by_category:
+                continue
                 
-                if verbose:
-                    lines.append(f"   • {file_meta.path}")
-                    lines.append(f"     Size: {size_mb:.2f} MB, Modified: {mtime_str}")
-                else:
-                    lines.append(f"   • {file_meta.path}")
+            category_groups = groups_by_category[category]
+            if category_groups:
+                lines.append(f"\n🏷️  {category.value.upper()} FILES:")
+                
+                for group in category_groups:
+                    lines.append(f"\n📁 GROUP {group_num} ({len(group.files)} files, {group.match_type}):")
+                    group_num += 1
+                    
+                    for file_meta in group.files:
+                        size_mb = file_meta.size / (1024 * 1024)
+                        mtime_str = time.strftime('%Y-%m-%d %H:%M:%S', 
+                                                 time.localtime(file_meta.mtime))
+                        
+                        if verbose:
+                            lines.append(f"   • {file_meta.path}")
+                            lines.append(f"     Size: {size_mb:.2f} MB, Modified: {mtime_str}")
+                        else:
+                            lines.append(f"   • {file_meta.path}")
     else:
         lines.append("✅ No duplicate files found!")
     
@@ -220,15 +341,17 @@ def format_duplicate_report(
 def fast_find_duplicates(
     directory: Path,
     verbose: bool = False,
-    quiet: bool = False
+    quiet: bool = False,
+    use_categories: bool = True
 ) -> Tuple[List[DuplicateGroup], List[FileMetadata]]:
     """
-    Fast duplicate detection using metadata only.
+    Fast duplicate detection using metadata only with category-specific rules.
     
     Args:
         directory: Directory to scan
         verbose: Enable verbose output
         quiet: Suppress non-essential output
+        use_categories: Use category-specific duplicate detection
         
     Returns:
         Tuple of (duplicate_groups, unique_files)
@@ -247,7 +370,11 @@ def fast_find_duplicates(
             print("No files found to analyze.")
         return [], []
     
-    # Find duplicates
-    duplicate_groups, unique_files = find_metadata_duplicates(files, verbose and not quiet)
+    # Find duplicates with category-specific rules
+    duplicate_groups, unique_files = find_metadata_duplicates(
+        files, 
+        verbose and not quiet,
+        use_categories=use_categories
+    )
     
     return duplicate_groups, unique_files

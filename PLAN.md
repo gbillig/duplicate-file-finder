@@ -16,25 +16,15 @@ This plan implements a metadata-based duplicate detection system optimized for H
 - Include basic unit tests
 - **Working program:** Fast metadata-only duplicate finder
 
-### 2. feat: Add file categorization and category-specific logic
-- Detect file types: photos (.jpg, .png, .tiff), videos (.mp4, .avi, .mov), documents (.pdf, .docx), other
-- Category-specific duplicate detection strategies
-- Photos: filename + size matching with date tolerance
-- Videos: filename + size with duration metadata (basic)
-- Documents: filename + size + exact date matching
-- Add tests for each file category
-- **Working program:** Smarter detection based on file types
+### 2. feat: Simplify to filename + size matching
+- Simple duplicate detection: same filename + same file size = duplicate
+- Remove complex date/time comparisons (not needed for exact duplicates)
+- Keep file categorization for future use but simplify matching logic
+- Much faster processing without unnecessary complexity
+- Add tests for simplified matching
+- **Working program:** Fast, accurate duplicate detection
 
-### 3. feat: Add EXIF metadata extraction for photos
-- Implement EXIF reader for photo date taken extraction
-- Use PIL/Pillow for lightweight EXIF access
-- Add "date taken" to photo duplicate detection logic
-- Handle EXIF read errors gracefully
-- Batch EXIF processing for performance
-- Include EXIF extraction tests
-- **Working program:** Enhanced photo duplicate detection with date taken
-
-### 4. feat: Add output formatting and reporting
+### 3. feat: Add output formatting and reporting
 - Detailed duplicate reports with file paths and metadata
 - Summary statistics: total files, duplicates by confidence, potential space savings
 - JSON output option for scripting integration  
@@ -42,7 +32,7 @@ This plan implements a metadata-based duplicate detection system optimized for H
 - Include output formatting tests
 - **Working program:** Professional duplicate reporting
 
-### 5. feat: Add Windows-specific optimizations
+### 4. feat: Add Windows-specific optimizations
 - Windows path handling and case sensitivity
 - NTFS alternate data streams awareness
 - Windows file attribute handling
@@ -50,7 +40,7 @@ This plan implements a metadata-based duplicate detection system optimized for H
 - Add Windows-specific tests
 - **Working program:** Optimized for Windows 10 target environment
 
-### 6. docs: Add comprehensive documentation
+### 5. docs: Add comprehensive documentation
 - README with fast mode usage examples
 - Performance benchmarks vs hash-based approach
 - Windows setup and usage guide

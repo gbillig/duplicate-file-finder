@@ -1863,6 +1863,28 @@ class TestAdaptiveOptimization:
 class TestFastDetector:
     """Test fast metadata-based duplicate detection."""
     
+    def test_file_categorization(self):
+        """Test file categorization by extension."""
+        # Test photo extensions
+        assert fast_detector.categorize_file(Path("test.jpg")) == fast_detector.FileCategory.PHOTO
+        assert fast_detector.categorize_file(Path("test.PNG")) == fast_detector.FileCategory.PHOTO
+        assert fast_detector.categorize_file(Path("test.raw")) == fast_detector.FileCategory.PHOTO
+        
+        # Test video extensions
+        assert fast_detector.categorize_file(Path("test.mp4")) == fast_detector.FileCategory.VIDEO
+        assert fast_detector.categorize_file(Path("test.AVI")) == fast_detector.FileCategory.VIDEO
+        assert fast_detector.categorize_file(Path("test.mov")) == fast_detector.FileCategory.VIDEO
+        
+        # Test document extensions
+        assert fast_detector.categorize_file(Path("test.pdf")) == fast_detector.FileCategory.DOCUMENT
+        assert fast_detector.categorize_file(Path("test.DOCX")) == fast_detector.FileCategory.DOCUMENT
+        assert fast_detector.categorize_file(Path("test.txt")) == fast_detector.FileCategory.DOCUMENT
+        
+        # Test other extensions
+        assert fast_detector.categorize_file(Path("test.zip")) == fast_detector.FileCategory.OTHER
+        assert fast_detector.categorize_file(Path("test.exe")) == fast_detector.FileCategory.OTHER
+        assert fast_detector.categorize_file(Path("test")) == fast_detector.FileCategory.OTHER
+    
     def test_scan_files_metadata(self, tmp_path):
         """Test metadata scanning of files."""
         # Create test files
@@ -1910,7 +1932,8 @@ class TestFastDetector:
         
         # Scan and analyze
         files = fast_detector.scan_files_metadata(tmp_path, verbose=False)
-        duplicates, unique = fast_detector.find_metadata_duplicates(files, verbose=False)
+        # Test with original exact matching (no categories)
+        duplicates, unique = fast_detector.find_metadata_duplicates(files, verbose=False, use_categories=False)
         
         # Should find one duplicate group
         assert len(duplicates) == 1
@@ -2038,3 +2061,108 @@ class TestFastDetector:
         
         with pytest.raises(NotADirectoryError):
             fast_detector.fast_find_duplicates(file_path)
+    
+    def test_simplified_duplicate_detection(self, tmp_path):
+        """Test simplified duplicate detection (name + size only)."""
+        import time
+        import os
+        
+        # Create files with same name and size but different times
+        content = "fake photo data"
+        file1 = tmp_path / "photo.jpg"
+        file2 = tmp_path / "backup" / "photo.jpg"
+        
+        file1.write_text(content)
+        file2.parent.mkdir(exist_ok=True)
+        file2.write_text(content)
+        
+        # Set very different times (shouldn't matter)
+        mtime1 = time.time() - 86400 * 7  # 7 days ago
+        mtime2 = time.time()  # now
+        os.utime(file1, (mtime1, mtime1))
+        os.utime(file2, (mtime2, mtime2))
+        
+        # Run detection
+        duplicates, unique = fast_detector.fast_find_duplicates(
+            tmp_path, verbose=False, quiet=True, use_categories=True
+        )
+        
+        # Should find duplicates based on name + size alone
+        assert len(duplicates) == 1
+        assert len(duplicates[0].files) == 2
+        assert duplicates[0].category == fast_detector.FileCategory.PHOTO
+    
+    def test_name_size_matching_all_files(self, tmp_path):
+        """Test that all files with same name and size are duplicates."""
+        import time
+        import os
+        
+        # Create document files with same name and size
+        content = "document content"
+        file1 = tmp_path / "doc.pdf"
+        file2 = tmp_path / "backup" / "doc.pdf"
+        file3 = tmp_path / "old" / "doc.pdf"
+        
+        file1.write_text(content)
+        file2.parent.mkdir(exist_ok=True)
+        file2.write_text(content)
+        file3.parent.mkdir(exist_ok=True)
+        file3.write_text(content)
+        
+        # Set very different times (shouldn't matter)
+        mtime1 = time.time() - 3600
+        mtime2 = time.time() - 86400
+        mtime3 = time.time() - 86400 * 30
+        os.utime(file1, (mtime1, mtime1))
+        os.utime(file2, (mtime2, mtime2))
+        os.utime(file3, (mtime3, mtime3))
+        
+        # Run detection
+        duplicates, unique = fast_detector.fast_find_duplicates(
+            tmp_path, verbose=False, quiet=True, use_categories=True
+        )
+        
+        # Should find all 3 as duplicates (same name + size)
+        assert len(duplicates) == 1
+        assert len(duplicates[0].files) == 3
+        assert len(unique) == 0
+    
+    
+    def test_mixed_categories_in_same_directory(self, tmp_path):
+        """Test handling of mixed file categories."""
+        import time
+        import os
+        
+        # Create files of different categories
+        photo1 = tmp_path / "image.jpg"
+        photo2 = tmp_path / "backup" / "image.jpg"
+        video1 = tmp_path / "video.mp4"
+        video2 = tmp_path / "backup" / "video.mp4"
+        doc1 = tmp_path / "document.pdf"
+        
+        photo1.write_text("photo data")
+        video1.write_text("video data")
+        doc1.write_text("doc data")
+        
+        (tmp_path / "backup").mkdir(exist_ok=True)
+        photo2.write_text("photo data")
+        video2.write_text("video data")
+        
+        # Set same mtime for all
+        mtime = time.time() - 3600
+        for f in [photo1, photo2, video1, video2, doc1]:
+            os.utime(f, (mtime, mtime))
+        
+        # Run detection
+        duplicates, unique = fast_detector.fast_find_duplicates(
+            tmp_path, verbose=False, quiet=True, use_categories=True
+        )
+        
+        # Should find 2 duplicate groups (photos and videos)
+        assert len(duplicates) == 2
+        assert len(unique) == 1  # doc1 is unique
+        
+        # Check categories are correctly identified
+        categories = {g.category for g in duplicates}
+        assert fast_detector.FileCategory.PHOTO in categories
+        assert fast_detector.FileCategory.VIDEO in categories
