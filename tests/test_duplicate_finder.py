@@ -12,7 +12,7 @@ import os
 # Add parent directory to path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from duplicate_finder import cli, hasher, scanner, detector, formatter, folder_detector, parallel_hasher, memory_efficient_detector, adaptive_optimizer
+from duplicate_finder import cli, hasher, scanner, detector, formatter, folder_detector, parallel_hasher, memory_efficient_detector, adaptive_optimizer, fast_detector
 import pytest
 
 
@@ -1858,3 +1858,183 @@ class TestAdaptiveOptimization:
         assert "OS" in summary
         assert "I/O workers" in summary
         assert "CPU workers" in summary
+
+
+class TestFastDetector:
+    """Test fast metadata-based duplicate detection."""
+    
+    def test_scan_files_metadata(self, tmp_path):
+        """Test metadata scanning of files."""
+        # Create test files
+        file1 = tmp_path / "test1.txt"
+        file2 = tmp_path / "subdir" / "test2.txt"
+        
+        file1.write_text("content1")
+        file2.parent.mkdir(exist_ok=True)
+        file2.write_text("content2")
+        
+        # Scan metadata
+        files = fast_detector.scan_files_metadata(tmp_path, verbose=False)
+        
+        # Should find both files
+        assert len(files) == 2
+        
+        # Check metadata structure
+        for file_meta in files:
+            assert hasattr(file_meta, 'path')
+            assert hasattr(file_meta, 'size')
+            assert hasattr(file_meta, 'mtime')
+            assert hasattr(file_meta, 'name')
+            assert hasattr(file_meta, 'name_lower')
+            assert file_meta.size > 0
+            assert file_meta.mtime > 0
+    
+    def test_find_metadata_duplicates_exact_match(self, tmp_path):
+        """Test finding duplicates with exact filename, size, and time match."""
+        import time
+        import os
+        
+        # Create files with same content and modify time
+        content = "duplicate content"
+        file1 = tmp_path / "duplicate.txt"
+        file2 = tmp_path / "subfolder" / "duplicate.txt"
+        
+        file1.write_text(content)
+        file2.parent.mkdir(exist_ok=True)
+        file2.write_text(content)
+        
+        # Set same modification time
+        mtime = time.time() - 3600  # 1 hour ago
+        os.utime(file1, (mtime, mtime))
+        os.utime(file2, (mtime, mtime))
+        
+        # Scan and analyze
+        files = fast_detector.scan_files_metadata(tmp_path, verbose=False)
+        duplicates, unique = fast_detector.find_metadata_duplicates(files, verbose=False)
+        
+        # Should find one duplicate group
+        assert len(duplicates) == 1
+        assert len(duplicates[0].files) == 2
+        assert duplicates[0].match_type == 'exact'
+        assert len(unique) == 0
+    
+    def test_find_metadata_duplicates_no_duplicates(self, tmp_path):
+        """Test with files that have different names."""
+        # Create files with different names
+        file1 = tmp_path / "file1.txt"
+        file2 = tmp_path / "file2.txt"
+        file3 = tmp_path / "file3.txt"
+        
+        for i, file_path in enumerate([file1, file2, file3], 1):
+            file_path.write_text(f"content {i}")
+        
+        # Scan and analyze
+        files = fast_detector.scan_files_metadata(tmp_path, verbose=False)
+        duplicates, unique = fast_detector.find_metadata_duplicates(files, verbose=False)
+        
+        # Should find no duplicates
+        assert len(duplicates) == 0
+        assert len(unique) == 3
+    
+    def test_find_metadata_duplicates_same_name_different_size(self, tmp_path):
+        """Test files with same name but different size."""
+        # Create files with same name but different content
+        file1 = tmp_path / "test.txt"
+        file2 = tmp_path / "subfolder" / "test.txt"
+        
+        file1.write_text("short")
+        file2.parent.mkdir(exist_ok=True)
+        file2.write_text("much longer content")
+        
+        # Scan and analyze
+        files = fast_detector.scan_files_metadata(tmp_path, verbose=False)
+        duplicates, unique = fast_detector.find_metadata_duplicates(files, verbose=False)
+        
+        # Should not find duplicates (same name but different size)
+        assert len(duplicates) == 0
+        assert len(unique) == 2
+    
+    def test_fast_find_duplicates_integration(self, tmp_path):
+        """Test the main fast duplicate finder function."""
+        import time
+        import os
+        
+        # Create duplicate files
+        content = "test content"
+        file1 = tmp_path / "duplicate.pdf"
+        file2 = tmp_path / "backup" / "duplicate.pdf"
+        
+        file1.write_text(content)
+        file2.parent.mkdir(exist_ok=True)
+        file2.write_text(content)
+        
+        # Set same modification time
+        mtime = time.time() - 1800  # 30 minutes ago
+        os.utime(file1, (mtime, mtime))
+        os.utime(file2, (mtime, mtime))
+        
+        # Create unique file
+        unique_file = tmp_path / "unique.txt"
+        unique_file.write_text("unique content")
+        
+        # Run fast detection
+        duplicates, unique = fast_detector.fast_find_duplicates(tmp_path, verbose=False, quiet=True)
+        
+        # Verify results
+        assert len(duplicates) == 1
+        assert len(duplicates[0].files) == 2
+        assert len(unique) == 1
+        
+        # Check duplicate group contains expected files
+        duplicate_paths = {str(f.path) for f in duplicates[0].files}
+        assert str(file1) in duplicate_paths
+        assert str(file2) in duplicate_paths
+    
+    def test_format_duplicate_report(self, tmp_path):
+        """Test formatting of duplicate detection results."""
+        import time
+        import os
+        
+        # Create test data
+        file1 = tmp_path / "test.jpg"
+        file2 = tmp_path / "backup" / "test.jpg"
+        
+        content = "fake image data"
+        file1.write_text(content)
+        file2.parent.mkdir(exist_ok=True)
+        file2.write_text(content)
+        
+        mtime = time.time() - 3600
+        os.utime(file1, (mtime, mtime))
+        os.utime(file2, (mtime, mtime))
+        
+        # Run detection
+        duplicates, unique = fast_detector.fast_find_duplicates(tmp_path, verbose=False, quiet=True)
+        
+        # Format report
+        report = fast_detector.format_duplicate_report(duplicates, unique, verbose=False)
+        
+        # Verify report content
+        assert "FAST DUPLICATE DETECTION RESULTS" in report
+        assert "DUPLICATE FILES" in report
+        assert "GROUP 1" in report
+        assert "SUMMARY" in report
+        assert "Total files scanned: 2" in report
+        assert "Duplicate files: 2" in report
+        assert "Unique files: 0" in report
+        assert "Duplicate groups: 1" in report
+        
+    def test_nonexistent_directory_error(self, tmp_path):
+        """Test error handling for nonexistent directory."""
+        nonexistent = tmp_path / "nonexistent"
+        
+        with pytest.raises(FileNotFoundError):
+            fast_detector.fast_find_duplicates(nonexistent)
+    
+    def test_file_instead_of_directory_error(self, tmp_path):
+        """Test error handling when path is a file, not directory."""
+        file_path = tmp_path / "file.txt"
+        file_path.write_text("content")
+        
+        with pytest.raises(NotADirectoryError):
+            fast_detector.fast_find_duplicates(file_path)
