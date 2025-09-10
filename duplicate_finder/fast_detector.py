@@ -314,26 +314,76 @@ def format_duplicate_report(
     
     # Summary
     lines.append("")
-    lines.append("📊 SUMMARY")
-    lines.append("-" * 20)
+    lines.append("📊 SUMMARY STATISTICS")
+    lines.append("-" * 30)
     total_files = len(unique_files) + sum(len(group.files) for group in duplicate_groups)
     duplicate_files = sum(len(group.files) for group in duplicate_groups)
     
-    lines.append(f"📁 Total files scanned: {total_files}")
-    lines.append(f"👥 Duplicate files: {duplicate_files}")
-    lines.append(f"📄 Unique files: {len(unique_files)}")
-    lines.append(f"🔗 Duplicate groups: {len(duplicate_groups)}")
+    lines.append(f"📁 Total files scanned: {total_files:,}")
+    lines.append(f"👥 Duplicate files: {duplicate_files:,}")
+    lines.append(f"📄 Unique files: {len(unique_files):,}")
+    lines.append(f"🔗 Duplicate groups: {len(duplicate_groups):,}")
+    
+    # Breakdown by file type
+    if duplicate_groups:
+        category_counts = defaultdict(int)
+        for group in duplicate_groups:
+            category_counts[group.category] += len(group.files)
+        
+        if len(category_counts) > 1:
+            lines.append("")
+            lines.append("📂 Duplicates by file type:")
+            for category, count in sorted(category_counts.items(), key=lambda x: x[1], reverse=True):
+                lines.append(f"   • {category.value}: {count:,} files")
     
     # Potential space savings
     if duplicate_groups:
         total_duplicate_size = 0
+        largest_savings = 0
+        largest_group = None
+        
         for group in duplicate_groups:
             # Space saved = (count - 1) * file_size
             group_size = group.files[0].size * (len(group.files) - 1)
             total_duplicate_size += group_size
+            
+            if group_size > largest_savings:
+                largest_savings = group_size
+                largest_group = group
         
-        size_gb = total_duplicate_size / (1024 ** 3)
-        lines.append(f"💾 Potential space savings: {size_gb:.2f} GB")
+        lines.append("")
+        lines.append("💾 SPACE ANALYSIS")
+        lines.append("-" * 20)
+        
+        # Format sizes appropriately
+        if total_duplicate_size >= 1024 ** 3:
+            size_str = f"{total_duplicate_size / (1024 ** 3):.2f} GB"
+        elif total_duplicate_size >= 1024 ** 2:
+            size_str = f"{total_duplicate_size / (1024 ** 2):.2f} MB"
+        else:
+            size_str = f"{total_duplicate_size / 1024:.2f} KB"
+        
+        lines.append(f"   Total potential savings: {size_str}")
+        
+        if largest_group and largest_savings >= 1024 ** 2:  # Only show if > 1MB
+            if largest_savings >= 1024 ** 3:
+                largest_str = f"{largest_savings / (1024 ** 3):.2f} GB"
+            else:
+                largest_str = f"{largest_savings / (1024 ** 2):.2f} MB"
+            
+            lines.append(f"   Largest duplicate group: {largest_str}")
+            lines.append(f"     ({len(largest_group.files)} copies of {largest_group.files[0].name})")
+    
+    # Performance metrics
+    if verbose:
+        lines.append("")
+        lines.append("⚡ PERFORMANCE")
+        lines.append("-" * 20)
+        lines.append(f"   Detection method: Metadata only (name + size)")
+        lines.append(f"   No content hashing required")
+        if duplicate_groups:
+            avg_group_size = duplicate_files / len(duplicate_groups)
+            lines.append(f"   Average duplicates per group: {avg_group_size:.1f}")
     
     return "\n".join(lines)
 

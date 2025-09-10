@@ -162,13 +162,38 @@ def main():
                     for g in duplicate_groups
                 )
                 
+                # Calculate largest duplicate group
+                largest_group_size = 0
+                largest_group_name = ""
+                if duplicate_groups:
+                    for g in duplicate_groups:
+                        group_size = g.files[0].size * (len(g.files) - 1)
+                        if group_size > largest_group_size:
+                            largest_group_size = group_size
+                            largest_group_name = g.files[0].name
+                
+                # Format sizes appropriately
+                def format_size(size_bytes):
+                    if size_bytes >= 1024 ** 3:
+                        return f"{size_bytes / (1024 ** 3):.2f} GB"
+                    elif size_bytes >= 1024 ** 2:
+                        return f"{size_bytes / (1024 ** 2):.2f} MB"
+                    else:
+                        return f"{size_bytes / 1024:.2f} KB"
+                
                 json_output["statistics"] = {
                     "total_files": total_files,
                     "duplicate_files_count": duplicate_files_count,
                     "unique_files_count": len(unique_files),
                     "duplicate_groups_count": len(duplicate_groups),
-                    "total_potential_savings": total_duplicate_size,
-                    "total_potential_savings_formatted": f"{total_duplicate_size / (1024**3):.2f} GB"
+                    "total_potential_savings_bytes": total_duplicate_size,
+                    "total_potential_savings": format_size(total_duplicate_size),
+                    "largest_duplicate_group": {
+                        "name": largest_group_name,
+                        "savings_bytes": largest_group_size,
+                        "savings": format_size(largest_group_size)
+                    } if largest_group_size > 0 else None,
+                    "detection_method": "metadata_only"
                 }
                 
                 print(json.dumps(json_output, indent=2))
