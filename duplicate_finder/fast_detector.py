@@ -3,6 +3,8 @@ Fast metadata-based duplicate detection optimized for HDDs.
 """
 
 import os
+import sys
+import platform
 from pathlib import Path
 from typing import Dict, List, Tuple, Optional, Set
 from dataclasses import dataclass
@@ -47,6 +49,80 @@ class DuplicateGroup:
     category: FileCategory = FileCategory.OTHER
 
 
+def is_windows() -> bool:
+    """Check if running on Windows."""
+    return platform.system() == 'Windows'
+
+
+def normalize_windows_path(path: Path) -> Path:
+    """
+    Normalize Windows path for consistent comparison.
+    
+    - Convert to absolute path
+    - Handle UNC paths
+    - Normalize drive letters to uppercase
+    """
+    path = path.resolve()
+    
+    if is_windows():
+        # Convert drive letter to uppercase for consistency
+        path_str = str(path)
+        if len(path_str) >= 2 and path_str[1] == ':':
+            path_str = path_str[0].upper() + path_str[1:]
+            path = Path(path_str)
+    
+    return path
+
+
+def get_windows_attributes(file_path: Path) -> Optional[int]:
+    """
+    Get Windows file attributes if on Windows.
+    
+    Returns None on non-Windows systems or if attributes can't be read.
+    """
+    if not is_windows():
+        return None
+        
+    try:
+        import ctypes
+        from ctypes import wintypes
+        
+        # GetFileAttributesW returns file attributes
+        attrs = ctypes.windll.kernel32.GetFileAttributesW(str(file_path))
+        if attrs == -1:  # INVALID_FILE_ATTRIBUTES
+            return None
+        return attrs
+    except (ImportError, AttributeError, OSError):
+        return None
+
+
+def should_skip_windows_file(file_path: Path) -> bool:
+    """
+    Check if file should be skipped on Windows.
+    
+    Skips:
+    - System files
+    - Hidden files (optional)
+    - Temporary files
+    """
+    if not is_windows():
+        return False
+    
+    attrs = get_windows_attributes(file_path)
+    if attrs is None:
+        return False
+    
+    # Windows file attribute constants
+    FILE_ATTRIBUTE_SYSTEM = 0x4
+    FILE_ATTRIBUTE_TEMPORARY = 0x100
+    
+    # Skip system and temporary files
+    if attrs & FILE_ATTRIBUTE_SYSTEM or attrs & FILE_ATTRIBUTE_TEMPORARY:
+        return True
+    
+    return False
+
+
 def categorize_file(file_path: Path) -> FileCategory:
     """
     Categorize a file based on its extension.
@@ -69,13 +145,14 @@ def categorize_file(file_path: Path) -> FileCategory:
         return FileCategory.OTHER
 
 
-def scan_files_metadata(directory: Path, verbose: bool = False) -> List[FileMetadata]:
+def scan_files_metadata(directory: Path, verbose: bool = False, skip_system_files: bool = True) -> List[FileMetadata]:
     """
     Scan directory and collect file metadata efficiently.
     
     Args:
         directory: Directory to scan
         verbose: Enable verbose output
+        skip_system_files: Skip Windows system/temp files
         
     Returns:
         List of FileMetadata objects
@@ -83,16 +160,28 @@ def scan_files_metadata(directory: Path, verbose: bool = False) -> List[FileMeta
     files = []
     start_time = time.time()
     file_count = 0
+    skipped_count = 0
+    
+    # Normalize directory path for Windows
+    directory = normalize_windows_path(directory)
     
     if verbose:
         print(f"Scanning directory: {directory}")
+        if is_windows():
+            print("  Windows optimizations enabled")
     
     try:
+        # Use os.walk for better Windows performance
         for root, dirs, filenames in os.walk(directory):
             root_path = Path(root)
             
             for filename in filenames:
                 file_path = root_path / filename
+                
+                # Skip Windows system/temp files if requested
+                if skip_system_files and should_skip_windows_file(file_path):
+                    skipped_count += 1
+                    continue
                 
                 try:
                     # Get file stats in one call
@@ -101,12 +190,16 @@ def scan_files_metadata(directory: Path, verbose: bool = False) -> List[FileMeta
                     # Categorize the file
                     category = categorize_file(file_path)
                     
+                    # On Windows, normalize the path for consistent comparison
+                    if is_windows():
+                        file_path = normalize_windows_path(file_path)
+                    
                     files.append(FileMetadata(
                         path=file_path,
                         size=stat_result.st_size,
                         mtime=stat_result.st_mtime,
                         name=filename,
-                        name_lower=filename.lower(),
+                        name_lower=filename.lower(),  # Case-insensitive on Windows
                         category=category
                     ))
                     
@@ -129,6 +222,8 @@ def scan_files_metadata(directory: Path, verbose: bool = False) -> List[FileMeta
     elapsed = time.time() - start_time
     if verbose:
         print(f"Completed scan: {file_count} files in {elapsed:.1f}s")
+        if skipped_count > 0:
+            print(f"  Skipped {skipped_count} system/temporary files")
     
     return files
 

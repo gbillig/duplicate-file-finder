@@ -2166,3 +2166,43 @@ class TestFastDetector:
         categories = {g.category for g in duplicates}
         assert fast_detector.FileCategory.PHOTO in categories
         assert fast_detector.FileCategory.VIDEO in categories
+    
+    def test_windows_helpers(self):
+        """Test Windows-specific helper functions."""
+        # Test is_windows detection
+        is_windows = fast_detector.is_windows()
+        assert isinstance(is_windows, bool)
+        
+        # Test path normalization (should work on any platform)
+        path = Path("/test/path")
+        normalized = fast_detector.normalize_windows_path(path)
+        assert isinstance(normalized, Path)
+        
+        # Test that non-Windows systems return None for attributes
+        if not fast_detector.is_windows():
+            attrs = fast_detector.get_windows_attributes(Path("/tmp"))
+            assert attrs is None
+            
+            # Should not skip files on non-Windows
+            should_skip = fast_detector.should_skip_windows_file(Path("/tmp/test.txt"))
+            assert should_skip is False
+    
+    def test_case_insensitive_matching(self, tmp_path):
+        """Test case-insensitive filename matching (Windows behavior)."""
+        # Create files with different case
+        file1 = tmp_path / "Test.TXT"
+        file2 = tmp_path / "backup" / "test.txt"
+        
+        content = "same content"
+        file1.write_text(content)
+        file2.parent.mkdir(exist_ok=True)
+        file2.write_text(content)
+        
+        # Run detection
+        duplicates, unique = fast_detector.fast_find_duplicates(
+            tmp_path, verbose=False, quiet=True
+        )
+        
+        # Should find duplicates despite case differences
+        assert len(duplicates) == 1
+        assert len(duplicates[0].files) == 2
