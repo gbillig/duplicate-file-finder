@@ -175,14 +175,6 @@ Implement three-stage approach to optimize performance:
 Reduces full file reads by ~70% in typical use cases.
 ```
 
-### Auto-generated Footer
-When using Claude Code to generate commits, add:
-```
-🤖 Generated with [Claude Code](https://claude.ai/code)
-
-Co-Authored-By: Claude <noreply@anthropic.com>
-```
-
 ## Performance Considerations
 
 ### Memory Efficiency
